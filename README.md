@@ -1,214 +1,166 @@
 # netdispatch
 
-**Self-hosted, Docker-native PXE boot coordination for many subnets and sites.**
+**Self-hosted network boot (PXE) coordination for many subnets and sites.**
 
-netdispatch uses a hub-and-spoke design. A central **hub** holds the web dashboard, authentication, database and image repository. Small, stateless **relays** sit on each subnet or VLAN and answer PXE requests there. A machine that network-boots on any subnet with a relay shows up live on the dashboard, tagged with its site, and waits in a hold loop until an administrator dispatches something to it:
+Plug a machine in, set it to boot from the network, and it appears on the netdispatch dashboard. It waits there until you pick what it should boot:
 
-- a Windows install, with a per-machine `autounattend.xml`
-- WinPE tools such as Hiren's BootCD PE
-- a Linux live or installer ISO
-- a raw diagnostic ISO
+- a Windows 11/10 install that runs fully unattended, from an `autounattend.xml` template rendered for that machine
+- a WinPE toolkit such as Hiren's BootCD PE
+- a Linux live system or installer
+- any other bootable ISO
+
+netdispatch has two parts:
+
+- **Hub.** One central server holds the web dashboard, sign-in, the database and your image library.
+- **Relays.** A tiny container runs on each network segment where machines will PXE-boot. Relays work *alongside* your existing DHCP server, so routers and firewalls need no PXE configuration.
 
 ```
                        ┌──────────────────────────── hub (docker compose) ───────────────────────────┐
-  admin browser ──────►│ reverse proxy ─► server :8000  FastAPI · SQLite · dashboard · OIDC · /boot   │
-                       │                               /files/* (wimboot, kernels, WIMs, ISOs)       │
-                       │                  samba  :445  read-only \\hub\netdispatch\<image-id>        │
+  admin browser ──────►│ reverse proxy ─► server :8000   dashboard · sign-in · boot scripts · images │
+                       │                  samba  :445    read-only Windows install share             │
                        └──────────────▲───────────────────────────────▲──────────────────────────────┘
-                     heartbeat (30 s) │                               │ HTTP(S) boot traffic, SMB
+                     heartbeat (30 s) │                               │ boot downloads (HTTP/S, SMB)
              ┌────────────────────────┴───────┐       ┌───────────────┴────────────────┐
-             │ relay "site-a-vlan20"          │       │ relay "branch-office"          │
-             │ dnsmasq ProxyDHCP + TFTP       │  ...  │ dnsmasq ProxyDHCP + TFTP       │
-             └───────▲────────────────────────┘       └───────▲────────────────────────┘
-                     │ L2 broadcast (DHCP/PXE)                │
-              PXE clients on VLAN 20                   PXE clients at the branch
+             │ relay "office-vlan20"          │       │ relay "branch-office"          │
+             └───────▲────────────────────────┘  ...  └───────▲────────────────────────┘
+                     │ PXE broadcasts                         │
+              machines on VLAN 20                     machines at the branch
 ```
 
-## How a boot works
+---
+
+## Contents
+
+1. [How it works](#how-it-works)
+2. [Requirements](#requirements)
+3. [Install the hub](#install-the-hub)
+4. [Put the hub behind a reverse proxy](#put-the-hub-behind-a-reverse-proxy)
+5. [Sign-in: SSO and the local admin](#sign-in-sso-and-the-local-admin)
+6. [Add relays](#add-relays)
+7. [Add images](#add-images)
+8. [Windows installs and unattend templates](#windows-installs-and-unattend-templates)
+9. [Deploy a machine](#deploy-a-machine)
+10. [Operations: upgrades, backups, logs](#operations-upgrades-backups-logs)
+11. [Troubleshooting](#troubleshooting)
+12. [Configuration reference](#configuration-reference)
+13. [Security notes](#security-notes)
+14. [Limitations](#limitations)
+
+---
+
+## How it works
 
 ```mermaid
 sequenceDiagram
-    participant C as PXE client
-    participant D as Existing DHCP (router)
-    participant R as Relay (dnsmasq)
+    participant C as Machine (PXE)
+    participant D as Your DHCP server
+    participant R as Relay
     participant H as Hub
-    C->>D: DHCPDISCOVER (PXEClient)
-    D-->>C: IP lease (unchanged, no PXE options needed)
-    R-->>C: ProxyDHCP offer: boot ipxe.efi / undionly.kpxe from me
-    C->>R: TFTP ipxe.efi (netdispatch build, embedded script)
-    C->>R: TFTP netdispatch.ipxe (generated at relay start-up)
-    C->>H: GET /boot?mac=..&ip=..&relay=site-a&platform=efi
-    H-->>C: #!ipxe wait loop (banner, sleep 5, chain --replace /boot)
-    Note over H: admin clicks "Deploy now"
-    C->>H: GET /boot (next poll)
-    H-->>C: #!ipxe payload script (wimboot / kernel+initrd / sanboot)
-    C->>H: GET /files/... (WIM, kernel, initrd, autounattend.xml)
-    Note over C: Windows Setup reboots, PXE again
-    C->>H: GET /boot
-    H-->>C: #!ipxe exit to local disk (no reinstall loop)
+    C->>D: DHCP request
+    D-->>C: IP address (as always)
+    R-->>C: "Boot netdispatch's iPXE from me"
+    C->>R: download iPXE + boot script (TFTP)
+    C->>H: "I'm aa:bb:cc:.. via relay office-vlan20"
+    H-->>C: hold screen, ask again in 5 s (repeats)
+    Note over H: you click "Deploy now"
+    H-->>C: boot the chosen image
+    Note over C: installer reboots, PXE again
+    H-->>C: "boot from your local disk"
 ```
 
-1. **ProxyDHCP.** The relay's dnsmasq runs in ProxyDHCP mode. It never hands out IP addresses. It only adds PXE boot information alongside your existing DHCP server's offer, so the router needs no changes.
-2. **iPXE.** BIOS clients get `undionly.kpxe` and UEFI x64 clients get `ipxe.efi` (or `snponly.efi`), chosen by DHCP option 93. netdispatch compiles these binaries from source. Each one carries an **embedded script** that fetches `netdispatch.ipxe` from the relay instead of obeying the DHCP boot filename. So when the relay offers the binary again to a client already running netdispatch's iPXE, the client ignores it and can't loop.
-   - By default (`IPXE_CLIENTS=chainload`), clients whose firmware or NIC ROM already runs some other iPXE build also get netdispatch's build. Proxmox and QEMU VMs are the common case. This gives every client the same HTTPS support and CA trust.
-   - With `IPXE_CLIENTS=direct`, those clients are recognised by DHCP user class and fetch `netdispatch.ipxe` directly instead.
-3. **Hold loop.** `netdispatch.ipxe` chains to `CENTRAL_SERVER_URL/boot`. An unknown MAC is recorded as **Waiting**, and the hub returns a banner (MAC, IP, relay, firmware) that sleeps and re-polls with `chain --replace`, so the loop never nests and can run for days.
-4. **Dispatch.** On the next poll after an admin clicks **Deploy now**, the hub serves the payload script and marks the device **Booting payload**.
-5. **One-shot.** The next time the device PXE-boots (for example, Windows Setup rebooting), the hub tells iPXE to boot locally. iPXE then exits with a failure status, because UEFI firmware only moves on to the next boot entry after a *failed* boot option. The firmware falls through to the local disk. Alternatively, per deployment, the device goes back to the hold loop. A payload is never served twice by accident.
+Each machine moves through these states on the dashboard:
 
-Device states: `Waiting` → `Deploying` (dispatched, not yet picked up) → `Booting payload` → `Local boot`. A device that stops polling for `DEVICE_OFFLINE_SECONDS` shows as `Offline`. **Reset to hold loop** and **Boot local** are always available.
-
-## Quick start (hub)
-
-Requirements: a Linux host with Docker Engine and Compose v2.24+.
-
-```bash
-git clone https://github.com/photoncody/netdispatch.git
-cd netdispatch
-cp .env.example .env
-```
-
-Edit `.env`. At minimum set these:
-
-| Variable | Example | Why |
-|---|---|---|
-| `PUBLIC_URL` | `https://pxe.example.com` | UI address, OIDC redirect base |
-| `BOOT_BASE_URL` | `http://10.0.0.5:8000` | Address PXE clients use (see below) |
-| `SMB_PASSWORD` | long random string | Needed for Windows Setup deployments |
-| `FALLBACK_ADMIN_PASSWORD` | long random string | Or leave empty to auto-generate |
-
-```bash
-docker compose up -d --build
-docker compose logs server | grep -i password   # only if you left FALLBACK_ADMIN_PASSWORD empty
-```
-
-Open `PUBLIC_URL` (or `http://<host>:8000`) and sign in.
-
-Data lives in `./data` (`DATA_PATH`):
-
-| Path | Contents |
+| Status | Meaning |
 |---|---|
-| `data/netdispatch.db` | SQLite: devices, relays, images, templates |
-| `data/isos/` | uploaded or copied ISO files |
-| `data/extracted/<id>/` | extracted image trees, served over HTTP and SMB |
-| `data/configs/*.xml` | autounattend templates (editable on disk too) |
+| **Waiting** | The machine is on the hold screen, checking in every 5 seconds. |
+| **Deploying** | You dispatched an image. It is served on the machine's next check-in. |
+| **Booting payload** | The image was handed to the machine and is booting or installing. |
+| **Local boot** | The next time it network-boots, netdispatch tells it to boot from its own disk. |
+| **Offline** | A waiting machine stopped checking in (turned off or unplugged). |
 
-Extraction roughly doubles the disk space each ISO uses.
+A dispatch is **one-shot**. When an installer reboots the machine and it network-boots again, it is sent to its local disk instead of reinstalling. You can choose "return to the hold loop" instead, per dispatch.
 
-## Deploying relays
+## Requirements
 
-1. In the dashboard, open **Relays → Add relay**. Pick an ID (for example `site-office-vlan20`) and a name.
-2. netdispatch shows a **one-time relay key** and a ready-made `docker-compose.yml`.
-3. On a Linux host attached to the target subnet (a VM, NUC or Raspberry Pi is plenty), save the snippet and run:
+**Hub host**
+- A Linux server or VM with Docker Engine and Docker Compose v2.24 or newer (`docker compose version`). Building also needs buildx 0.17 or newer (`docker buildx version`).
+- Disk space for your images. Every ISO is kept *and* extracted, so plan for about twice its size. A Windows ISO needs about 16 GB.
+
+**Relay hosts** (one per network segment)
+- Any small Linux machine or VM attached to that segment: a NUC, a Raspberry Pi or a VM on that VLAN.
+- It must be **Linux with Docker Engine**. Docker Desktop on Windows or macOS cannot receive DHCP broadcasts.
+- Nothing else on that host may use UDP ports 67 (DHCP) or 69 (TFTP).
+
+**Network**
+
+| From | To | Port | Why |
+|---|---|---|---|
+| Machines being booted | relay on their segment | UDP 67, 68, 4011, 69 | PXE + TFTP (broadcast, same segment) |
+| Machines being booted | hub | TCP 8000 (or your proxy's 80/443) | boot scripts, kernels, images |
+| Machines installing Windows | hub | TCP 445 | Windows install share (SMB) |
+| Relays | hub | TCP 8000 / 443 | heartbeat |
+| Admins | hub | TCP 443 / 8000 | dashboard |
+
+Your existing DHCP server must **not** hand out PXE boot options of its own (option 66/67, "next-server", "boot file name"). Remove them if they are set.
+
+## Install the hub
+
+1. **Get the code and create your settings file.**
+   ```bash
+   git clone https://github.com/photoncody/netdispatch.git
+   cd netdispatch
+   cp .env.example .env
+   ```
+
+2. **Edit `.env`.** These are the settings almost everyone changes:
+
+   | Setting | Example | What it's for |
+   |---|---|---|
+   | `PUBLIC_URL` | `https://pxe.example.com` | The address you open the dashboard at |
+   | `BOOT_BASE_URL` | `http://10.0.0.5:8000` | The address *booting machines* use to reach the hub. See [below](#which-boot-url). |
+   | `SMB_PASSWORD` | a long random string | Required for Windows installs. No double quotes. |
+   | `FALLBACK_ADMIN_PASSWORD` | a long random string | Local admin password. Leave empty to have one generated. |
+
+3. **Start it.**
    ```bash
    docker compose up -d --build
    ```
-   You can also clone this repository and use `docker-compose.relay.yml` with the `RELAY_*` variables from `.env.example`.
+   The first build takes a few minutes.
 
-The relay appears **online** within 30 seconds. Its card shows IP, subnet, interface and whether dnsmasq is running.
+4. **Sign in.** Open `PUBLIC_URL` (or `http://<hub-ip>:8000`) and sign in as `admin`. If you left `FALLBACK_ADMIN_PASSWORD` empty, read the generated password from the log:
+   ```bash
+   docker compose logs server | grep -i "admin password"
+   ```
+   The password is also saved in `data/initial_admin_password`.
 
-Relay requirements and notes:
+Everything netdispatch stores lives in `./data` (change it with `DATA_PATH`):
 
-- **Host networking is required** (`network_mode: host`, `cap_add: [NET_ADMIN]`). DHCP is a Layer 2 broadcast. Docker Desktop on Windows or macOS cannot receive it, so use a Linux host.
-- **Nothing else on that host may listen on UDP 67 (DHCP) or 69 (TFTP).** Other hosts on the subnet can, and the router's DHCP server is expected to.
-- **ProxyDHCP coexists with your router.** Your existing DHCP server keeps assigning addresses, and the relay only adds boot information. Make sure the existing DHCP server does **not** also hand out PXE options (66/67, "next-server", "boot file"), or clients may follow those instead.
-- **One relay per broadcast domain.** For several VLANs, run one relay per VLAN. That can be one host with several VLAN interfaces, using one relay container per interface with `RELAY_INTERFACE` set.
-- **Clients must reach the hub.** iPXE clients download everything (WIMs, kernels, ISOs) from `CENTRAL_SERVER_URL` directly, not through the relay. Windows Setup clients also need TCP 445 to the hub.
-- `RELAY_INTERFACE` and `SUBNET_RANGE` are auto-detected from the default route. Override them on multi-homed hosts.
-- `UEFI_BOOTFILE=snponly.efi` uses the firmware's own NIC driver. Try it if `ipxe.efi` has no driver for a NIC.
-- `IPXE_CLIENTS=direct` lets clients that already run iPXE (NIC ROMs, VM firmware) skip netdispatch's iPXE build. That build is only needed for HTTPS or a private CA.
-- **Bootstrap key.** If the hub has `RELAY_API_KEY` set, a relay presenting it auto-registers. This is convenient for labs. Per-relay keys from the UI can each be rotated or disabled individually.
-- **Relay on the hub host.** To also serve the hub's own subnet, run `docker compose --profile local-relay up -d`.
-
-## Images
-
-Upload ISOs under **Images**, or copy them into `data/isos/` and click **Rescan**. Uploads are streamed straight to disk, so multi-GB files are fine.
-
-Each image is then extracted with 7-Zip (UDF first, then ISO9660) and its boot profile is **auto-detected**:
-
-| Detected layout | Boot method | What is served |
-|---|---|---|
-| `sources/boot.wim` + `sources/install.wim/esd` | `windows_setup` | wimboot + BCD + boot.sdi + boot.wim, plus injected `winpeshl.ini`, `netdispatch.cmd` and `autounattend.xml` |
-| `sources/boot.wim` only (Hiren's, custom WinPE) | `winpe` | wimboot + BCD + boot.sdi + boot.wim |
-| `casper/vmlinuz` (Ubuntu and derivatives) | `linux` | `boot=casper ip=dhcp url={iso_url} …` |
-| `images/pxeboot/` (Fedora, RHEL, Rocky, Alma) | `linux` | `inst.repo={files_url}`, or `root=live:` for live images |
-| `arch/boot/x86_64/` | `linux` | `archiso_http_srv={files_url}/` |
-| `live/vmlinuz*` (Debian live) | `linux` | `boot=live fetch={files_url}/live/filesystem.squashfs` |
-| `boot/vmlinuz-*` + `apks/` (Alpine) | `linux` | `alpine_repo=… modloop=…` |
-| anything else | `sanboot` | the raw ISO over HTTP (range requests) |
-
-Use **Edit profile** to change the boot method, WIM paths, kernel, initrds or command line. The field suggestions list the files in the extracted tree.
-
-Kernel command-line placeholders:
-
-| Placeholder | Meaning |
+| Path | Contents |
 |---|---|
-| `{iso_url}` | URL of the raw ISO |
-| `{files_url}` | URL of the extracted tree (no trailing slash) |
-| `{base_url}` | hub boot URL |
-| `{mac}`, `{hostname}`, `{ip}`, `{relay}` | device values |
+| `data/netdispatch.db` | devices, relays, images, templates |
+| `data/isos/` | your ISO files |
+| `data/extracted/<id>/` | extracted copies of each ISO |
+| `data/configs/` | unattend templates (plain XML files, editable on disk) |
+| `data/secret_key` | session signing key |
 
-Notes:
-- Ubuntu's `url=` mode downloads the whole ISO into RAM, so the client needs more RAM than the ISO size.
-- `memdisk` is BIOS-only and suited to small images. On UEFI clients netdispatch falls back to `sanboot`.
-- No single method boots *every* ISO over a network. Images that rely on finding their own CD-ROM after the kernel starts need a distro-specific command line.
+### Which boot URL?
 
-## Windows deployments: wimboot, SMB and autounattend.xml
+Booting machines run iPXE, which downloads everything from `BOOT_BASE_URL`. It defaults to `PUBLIC_URL`.
 
-WinPE can be booted over HTTP, but Windows Setup then needs the full installation media (`install.wim`, several GB) as a file system. netdispatch serves it from the **samba sidecar**:
+- **Simplest and fastest:** use the hub's plain-HTTP LAN address, for example `BOOT_BASE_URL=http://10.0.0.5:8000`. Multi-gigabyte Windows images transfer faster without TLS.
+- **HTTPS with a public certificate** (for example Let's Encrypt): `PUBLIC_URL` works as is.
+- **HTTPS with a private/internal CA:** iPXE won't trust it by default. Either use a plain-HTTP boot URL, or put your CA certificate in `relay/certs/` before building the relays. See [relay/certs/README.md](relay/certs/README.md).
 
-1. On dispatch, the hub generates a random **deployment token**. The payload script loads `wimboot` and injects these files into WinPE's `X:\Windows\System32`:
-   - `BCD`, `boot.sdi` and `boot.wim` from the extracted ISO
-   - from `/files/d/<token>/`:
-     - `winpeshl.ini`, which replaces the WinPE shell with `netdispatch.cmd`
-     - `netdispatch.cmd`, which runs `wpeinit`, maps `\\SMB_HOST\netdispatch\<image-id>` with `SMB_USERNAME`/`SMB_PASSWORD` (retrying until the network is up), then runs `setup.exe /unattend:X:\Windows\System32\autounattend.xml`
-     - `autounattend.xml`, rendered for this MAC from the bound template
-2. The samba share is read-only. It requires authentication and SMB2+ because Windows 11 24H2 WinPE rejects guest access, and it supports signing.
-3. Token URLs only work while the deployment is in progress. The token is revoked as soon as the device returns to PXE, is reset, or is set to local boot. The unattend file and SMB credentials are never reachable through a guessable URL.
+Relays use the same address as their `CENTRAL_SERVER_URL`. Generated relay snippets fill it in for you.
 
-**Unattend templates** (**Unattend** tab, stored in `data/configs/`) are Jinja2 templates, rendered in a sandbox with XML escaping. Available variables:
+## Put the hub behind a reverse proxy
 
-| Variable | Value |
-|---|---|
-| `{{ hostname }}` | device label, or `ND-<last 6 MAC digits>`, truncated to 15 characters for `<ComputerName>` |
-| `{{ mac }}` | e.g. `aa:bb:cc:dd:ee:ff` |
-| `{{ mac_dash }}` | e.g. `AA-BB-…` |
-| `{{ mac_plain }}` | e.g. `AABB…` |
-| `{{ ip }}` | client IP |
-| `{{ relay }}` | relay ID |
-| `{{ image }}` | dispatched image name |
+You can run the dashboard behind your existing reverse proxy:
 
-Templates are validated on save: they must render to well-formed XML.
-
-A complete starting point is in [examples/unattend/win11-uefi-basic.xml](examples/unattend/win11-uefi-basic.xml). Paste it into **Unattend → New template**, or copy it to `data/configs/`. It does the following:
-- wipes disk 0 and creates the standard UEFI layout
-- installs image index 1
-- bypasses the TPM, Secure Boot and RAM checks
-- creates a local admin
-- skips OOBE
-
-Change its password before using it.
-
-**WinPE drivers.** WinPE needs inbox drivers for the client's NIC and disk controller. Physical Intel/Realtek NICs, NVMe and AHCI work out of the box. On VMs, use e1000e (or inject the VirtIO drivers into `boot.wim`). With a virtio-net NIC, WinPE can't map the share. With virtio-blk, Setup won't see the disk.
-
-Firewall: clients that install Windows need TCP 445 to the hub, besides HTTP(S). Set `SMB_HOST` if WinPE should reach Samba at a different address than `BOOT_BASE_URL`'s host.
-
-Hiren's BootCD PE and other WinPE-only images use the `winpe` method: wimboot only, with no SMB and no Setup.
-
-## Running behind a reverse proxy
-
-The hub speaks plain HTTP on port 8000. Put it behind your existing reverse proxy for the UI:
-
-- Set `PUBLIC_URL` to the external `https://` URL. OIDC redirect URIs are built from it, and cookies become `Secure` when it is HTTPS.
-- Set `FORWARDED_ALLOW_IPS` to the proxy's address so that uvicorn trusts `X-Forwarded-For` and `X-Forwarded-Proto`. netdispatch never builds URLs from the `Host` or `X-Forwarded-Host` headers. Every absolute URL comes from `PUBLIC_URL` or `BOOT_BASE_URL`.
-- Disable request body size limits on the proxy for `/api/isos/upload` (ISOs are several GB). Also raise its timeouts.
-
-**Boot traffic and TLS.** iPXE verifies HTTPS certificates against public CAs by default. If the proxy uses a private CA, choose one of these:
-
-- Set `BOOT_BASE_URL` (and the relays' `CENTRAL_SERVER_URL`) to a plain-HTTP LAN address such as `http://10.0.0.5:8000`. This is also faster for multi-GB WIM transfers.
-- Put your CA certificate in `relay/certs/` before building the relay, so it is compiled into iPXE. See [relay/certs/README.md](relay/certs/README.md).
-
-Exposure: `/boot`, `/files/*` and `/api/relays/heartbeat` must be reachable by clients and relays. Everything else needs a session.
+- Set `PUBLIC_URL` to the external `https://` address.
+- Set `FORWARDED_ALLOW_IPS` to your proxy's IP address (or the CIDR of its Docker network) so client IPs and HTTPS are detected correctly.
+- **Allow large uploads.** Remove the proxy's request-size limit and raise its timeouts. ISOs are several GB.
+- Booting machines may keep using the hub's direct LAN address (`BOOT_BASE_URL`). They don't need to go through the proxy.
 
 <details>
 <summary>nginx</summary>
@@ -217,7 +169,7 @@ Exposure: `/boot`, `/files/*` and `/api/relays/heartbeat` must be reachable by c
 server {
     listen 443 ssl http2;
     server_name pxe.example.com;
-    # ssl_certificate ...;
+    # ssl_certificate / ssl_certificate_key ...
 
     client_max_body_size 0;          # ISO uploads
     proxy_request_buffering off;     # stream uploads straight through
@@ -229,7 +181,6 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
     }
 }
 ```
@@ -258,84 +209,264 @@ labels:
   - traefik.http.routers.netdispatch.tls=true
   - traefik.http.services.netdispatch.loadbalancer.server.port=8000
 ```
-Traefik streams request bodies by default. Add `FORWARDED_ALLOW_IPS=<traefik network CIDR>` to `.env`.
+Also set `FORWARDED_ALLOW_IPS` to the CIDR of Traefik's Docker network.
 </details>
 
-## Authentication
+## Sign-in: SSO and the local admin
 
-**OIDC / SSO** uses Authlib with any standards-compliant provider (Authentik, Keycloak, Entra ID, Okta, Google Workspace, Zitadel and others):
+### Single sign-on (OIDC)
 
-```env
-OIDC_ENABLED=true
-OIDC_CLIENT_ID=netdispatch
-OIDC_CLIENT_SECRET=...
-OIDC_METADATA_URL=https://auth.example.com/application/o/netdispatch/.well-known/openid-configuration
-OIDC_SCOPES=openid email profile
-OIDC_ALLOWED_GROUPS=pxe-admins        # optional
-AUTO_REDIRECT_SSO=true                # optional: skip the login page
+Works with any OpenID Connect provider: Authentik, Keycloak, Microsoft Entra ID, Okta, Google Workspace, Zitadel and others.
+
+1. In your identity provider, create an OIDC application:
+   - type: confidential, authorization-code flow
+   - redirect URI: `https://pxe.example.com/auth/oidc/callback`, which is your `PUBLIC_URL` + `/auth/oidc/callback`
+2. Add the values to `.env`:
+   ```env
+   OIDC_ENABLED=true
+   OIDC_CLIENT_ID=netdispatch
+   OIDC_CLIENT_SECRET=...
+   OIDC_METADATA_URL=https://auth.example.com/application/o/netdispatch/.well-known/openid-configuration
+   OIDC_PROVIDER_NAME=Authentik            # label on the sign-in button
+   OIDC_ALLOWED_GROUPS=pxe-admins          # optional: restrict to these groups
+   AUTO_REDIRECT_SSO=true                  # optional: skip the sign-in page entirely
+   ```
+3. Apply it: `docker compose up -d`.
+
+Example metadata URLs:
+
+| Provider | `OIDC_METADATA_URL` |
+|---|---|
+| Keycloak | `https://kc.example.com/realms/<realm>/.well-known/openid-configuration` |
+| Entra ID | `https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration` |
+
+For group filtering with Entra ID, emit the `groups` claim and list group **IDs** in `OIDC_ALLOWED_GROUPS`.
+
+### Local admin (emergency access)
+
+The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`) keeps working even when SSO is configured:
+
+- Go to **`/login?local=true`**. This page never redirects to SSO.
+- If the identity provider is unreachable, netdispatch shows the local sign-in form automatically.
+- Repeated wrong passwords from one address are temporarily blocked.
+- To disable the local account, set `FALLBACK_ADMIN_ENABLED=false`.
+
+## Add relays
+
+1. In the dashboard, open **Relays → Add relay**.
+2. Enter an ID (lowercase, for example `office-vlan20`) and a display name, then click **Create relay**.
+3. Copy the **relay key**. It is shown only once.
+4. Copy the generated **docker-compose.yml**.
+5. On a Linux host attached to that network segment, save the file and start the relay:
+   ```bash
+   docker compose up -d --build
+   ```
+
+Within 30 seconds the relay's card turns **online** and shows its IP, subnet and interface.
+
+The generated file builds the relay straight from GitHub. To use your own registry instead, set `RELAY_IMAGE` on the hub. To build from a local checkout, use `docker-compose.relay.yml` with the `RELAY_*` settings from `.env.example`.
+
+Relay options (environment variables in the compose file):
+
+| Setting | Default | Use it when |
+|---|---|---|
+| `RELAY_INTERFACE` | interface of the default route | the host has several network interfaces |
+| `SUBNET_RANGE` | detected from the interface | you want to state the subnet explicitly, e.g. `192.168.20.0,proxy` |
+| `UEFI_BOOTFILE` | `ipxe.efi` | a UEFI machine's network card isn't detected. Try `snponly.efi`, which uses the firmware's own driver. |
+| `IPXE_CLIENTS` | `chainload` | `direct` skips loading netdispatch's iPXE on machines that already run iPXE, such as some VMs. Only works without HTTPS or a private CA. |
+| `RELAY_LOG_DHCP` | `true` | set to `false` to quiet the logs once everything works |
+
+**Several VLANs on one host:** run one relay container per VLAN interface. Give each its own `RELAY_ID`, key and `RELAY_INTERFACE`.
+
+**A relay on the hub host itself:** add `LOCAL_RELAY_API_KEY` (or a bootstrap `RELAY_API_KEY`) to `.env`, then run:
+```bash
+docker compose --profile local-relay up -d
 ```
 
-- Register the redirect URI `PUBLIC_URL/auth/oidc/callback` with the provider. PKCE (S256) is used.
-- Example metadata URLs:
-  - Keycloak: `https://kc.example.com/realms/<realm>/.well-known/openid-configuration`
-  - Entra ID: `https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration` (for group filtering, set `OIDC_GROUPS_CLAIM=groups` and emit group IDs)
-- With `AUTO_REDIRECT_SSO=true`, unauthenticated browser requests go straight to the provider. API requests get `401` instead.
+**Per-relay keys:**
+- **Rotate key** issues a new key; the old one stops working immediately.
+- **Disable** blocks a relay without deleting it.
+- A bootstrap `RELAY_API_KEY` on the hub lets relays register themselves on first contact. It's convenient in a lab, but per-relay keys are safer.
 
-**Emergency local admin.** `FALLBACK_ADMIN_USERNAME`/`FALLBACK_ADMIN_PASSWORD` log in at **`/login?local=true`**, which never auto-redirects. This keeps the console reachable when the IdP is down. If SSO can't be reached, the login page falls back to the local form automatically. Failed attempts are rate-limited per IP. Set `FALLBACK_ADMIN_ENABLED=false` to turn the local login off.
+## Add images
 
-**Session exemptions.** These paths are never redirected to SSO:
-- `/health`
-- `/boot`
-- `/files/*` (booting PCs)
-- `/api/relays/heartbeat` (authenticated by the `X-Relay-Key` header)
+Open **Images** and click **Upload ISO**. The upload shows a progress bar. For very large files, you can instead copy them into `data/isos/` on the hub and click **Rescan /data/isos**.
 
-Relay *management* (`/api/relays` create, rotate, delete) requires an admin session.
+Each image is then extracted, and netdispatch works out how to boot it:
+
+| Detected | Boot method | Notes |
+|---|---|---|
+| Windows 10/11 or Server install media | `windows_setup` | full unattended install, see the next section |
+| WinPE-based tools (Hiren's BootCD PE, custom PE) | `winpe` | boots the PE environment, no installer |
+| Ubuntu and derivatives (casper) | `linux` | the client needs more RAM than the ISO size, because the ISO is loaded into memory |
+| Fedora, RHEL, Rocky, Alma | `linux` | installer or live image |
+| Arch Linux | `linux` | |
+| Debian live | `linux` | |
+| Alpine | `linux` | |
+| anything else | `sanboot` | boots the raw ISO. Works for many UEFI tools and small rescue images. |
+
+Use **Edit profile** to adjust how an image boots:
+
+- **Method:** `windows_setup`, `winpe`, `linux`, `sanboot`, or `memdisk` (BIOS only; for small images).
+- **Linux:** kernel, initrd(s) and kernel command line. The fields suggest file names from the image. The command line can use these placeholders:
+
+  | Placeholder | Becomes |
+  |---|---|
+  | `{iso_url}` | download address of the raw ISO |
+  | `{files_url}` | address of the extracted files |
+  | `{base_url}` | the hub's boot URL |
+  | `{mac}`, `{hostname}`, `{ip}`, `{relay}` | values of the machine being booted |
+
+  Example: add `console=ttyS0,115200` to see a Linux boot on a serial console.
+- **Windows/WinPE:** paths to `BCD`, `boot.sdi` and `boot.wim`, and the Setup program.
+- **Re-run auto-detection** resets a profile. **Re-extract ISO** rebuilds the extracted copy.
+
+Not every ISO can boot over a network. Distributions that look for their own CD after the kernel starts need a distribution-specific command line, and the detected profiles provide one for the families listed above.
+
+## Windows installs and unattend templates
+
+How a Windows install runs:
+
+1. The machine boots Windows PE from the hub over HTTP.
+2. WinPE connects to the hub's read-only install share: `\\<hub>\netdispatch\<image-id>`.
+3. Windows Setup runs from that share, using the machine's `autounattend.xml` if you selected one.
+4. When Setup reboots, the machine is sent to its local disk and the install continues there.
+
+**Prerequisites:**
+- `SMB_PASSWORD` is set in `.env`.
+- Machines can reach the hub on TCP 445. If they must use a different address than the boot URL's host, set `SMB_HOST`.
+
+### Unattend templates
+
+Manage templates under **Unattend**. You can create one from scratch, import an existing `autounattend.xml` with **Import .xml**, or drop XML files into `data/configs/`.
+
+A ready-made template is included: [examples/unattend/win11-uefi-basic.xml](examples/unattend/win11-uefi-basic.xml). It has been tested end to end and does the following:
+- erases disk 0 and installs Windows
+- skips the TPM, Secure Boot and RAM checks
+- creates a local administrator, `ndadmin`
+- skips the out-of-box screens
+- signs in once automatically
+
+**Change its password before you use it.**
+
+Templates can contain per-machine values, filled in when each machine downloads its file:
+
+| Write this in the template | Becomes |
+|---|---|
+| `{{ hostname }}` | the machine's label from the dashboard, or `ND-` + the last 6 digits of its MAC. Shortened to 15 characters, the Windows computer-name limit. |
+| `{{ mac }}` | `aa:bb:cc:dd:ee:ff` |
+| `{{ mac_dash }}` | `AA-BB-CC-DD-EE-FF` |
+| `{{ mac_plain }}` | `AABBCCDDEEFF` |
+| `{{ ip }}` | the machine's IP address |
+| `{{ relay }}` | the relay ID the machine booted through |
+| `{{ image }}` | the image name |
+
+Templates are checked when you save them: the result must be valid XML. Use **Preview rendered** to see the final file.
+
+### Drivers in WinPE
+
+Windows PE only includes standard drivers.
+
+- **Physical machines:** most Intel and Realtek network cards, NVMe and SATA (AHCI) disks work out of the box.
+- **Intel VMD/RST storage (many recent laptops):** Setup won't see the disk. Switch the firmware's storage mode to AHCI, or add the RST driver to the image's `boot.wim`.
+- **Virtual machines:** use an **e1000e** network card and an NVMe or SATA disk. With VirtIO devices, WinPE can't reach the share and Setup won't find the disk, unless you add the VirtIO drivers to `boot.wim`.
+
+## Deploy a machine
+
+1. **Boot the machine from the network.** Choose network/PXE boot once, or put it first in the boot order. It shows a hold screen with its MAC address, IP and site, and appears under **Devices** as **Waiting**.
+2. Click **Dispatch / Configure** on its row.
+3. Fill in the dialog:
+   - **Label / hostname:** optional. Used as the Windows computer name via `{{ hostname }}`.
+   - **Image:** what to boot.
+   - **autounattend.xml template:** shown for Windows install images. Choose none for an interactive Setup.
+   - **After the payload boots:**
+     - **boot from local disk** (recommended for installs)
+     - **return to the hold loop** (for tools you want to run again)
+4. Click **Deploy now**. Within a few seconds the machine leaves the hold screen and boots the image.
+
+Other actions in the same dialog:
+
+| Button | Effect |
+|---|---|
+| **Reset to hold loop** | Cancels a pending dispatch, or brings a machine back to the hold screen on its next network boot. |
+| **Boot local** | The machine boots its own disk whenever it network-boots. |
+| **Forget device** | Removes it from the list. It reappears if it network-boots again. |
+| **Preview the iPXE script** | Shows exactly what the machine will receive next. Useful for troubleshooting. |
+
+**Tips**
+- **Prepare in advance:** **Pre-register MAC** adds a machine before it ever boots, so you can dispatch to it ahead of time.
+- **Let unknown machines boot normally:** by default every unknown machine that network-boots waits on the hold screen. Set `NEW_DEVICE_STATE=local` so they boot their own disk until you stage them.
+- **Network boot first works well:** with network boot first in the boot order, machines boot their own disk every time unless you dispatch something.
+
+## Operations: upgrades, backups, logs
+
+**Upgrade the hub**
+```bash
+git pull
+docker compose up -d --build
+```
+Upgrade relays the same way on each relay host (`docker compose up -d --build`).
+
+**Back up** `data/netdispatch.db`, `data/configs/` and `data/secret_key`. ISOs can be re-downloaded, and the extracted copies are rebuilt with **Re-extract**. For a consistent database copy, stop the server first (`docker compose stop server`) or use `sqlite3 data/netdispatch.db ".backup backup.db"`.
+
+**Logs**
+```bash
+docker compose logs -f server            # hub: boot requests, downloads, sign-ins
+docker compose logs -f samba             # Windows share access
+docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exchange
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| Machine gets an IP but reports *no boot file* / *PXE-E53*, or the relay log shows nothing | The relay isn't on the same segment, is listening on the wrong interface (`RELAY_INTERFACE`), or a firewall on the relay host blocks UDP 67/4011/69. Check that the relay card says dnsmasq **running**. |
+| Hold screen never appears; iPXE says *no ProxyDHCP relay answered* | Same as above. Also make sure the router's DHCP doesn't send its own PXE options. |
+| iPXE says *hub unreachable … retrying* | Machines can't reach `CENTRAL_SERVER_URL`. Check routing and firewalls. With HTTPS and a private CA, see [Which boot URL?](#which-boot-url). |
+| Relay card shows **offline** | Run `docker logs netdispatch-relay`. *invalid RELAY_API_KEY* means rotate the key and update the relay. *relay is disabled* means enable it. Connection errors mean the relay can't reach the hub. |
+| After an install, a UEFI machine stops in its firmware menu | No bootable disk entry follows the network entry in the boot order, or the install didn't complete. Check the boot order in the firmware. |
+| WinPE keeps printing *cannot reach \\\\…\\netdispatch\\N* | TCP 445 is blocked, `SMB_HOST` is wrong, `SMB_PASSWORD` is empty, or WinPE has no driver for the network card (see [Drivers in WinPE](#drivers-in-winpe)). |
+| Windows Setup shows no disks | WinPE has no storage driver: Intel VMD/RST, VirtIO or RAID. See [Drivers in WinPE](#drivers-in-winpe). |
+| Setup still asks questions | No template was selected when dispatching, or the template lacks those settings. Check **Preview rendered**. For multi-edition media, set the image index or a product key in the template. |
+| Linux kernel starts, then can't find its root file system | Adjust the command line in **Edit profile**. For Ubuntu, give the machine more RAM than the ISO size. |
+| Image status is **error** | Read the message under the status: usually disk space or an unreadable ISO. Fix it, then click **Re-extract ISO**. |
+| Large uploads fail partway | Your reverse proxy limits request size or times out. See [Put the hub behind a reverse proxy](#put-the-hub-behind-a-reverse-proxy), or copy the ISO into `data/isos/` and **Rescan**. |
+| Sign-in loops back to SSO, or *SSO failed* | The redirect URI in the IdP doesn't match `PUBLIC_URL/auth/oidc/callback`, or `PUBLIC_URL` is wrong. Use `/login?local=true` to get in meanwhile. |
+| Signed in but immediately signed out again | You're using a different address than `PUBLIC_URL`. Over plain HTTP, a secure (HTTPS) session cookie isn't kept. |
 
 ## Configuration reference
 
-Every setting is an environment variable. [.env.example](.env.example) documents them all, grouped into hub URLs, sessions, OIDC, local admin, relays, boot behaviour, SMB, and relay settings.
+[.env.example](.env.example) lists and explains every setting, grouped by topic:
+- hub addresses
+- sessions
+- OIDC
+- local admin
+- relays
+- boot behaviour
+- Windows share
+- relay options
+
+After changing `.env`, apply it with `docker compose up -d`.
 
 ## Security notes
 
-- `/boot` is unauthenticated by design, because PXE clients cannot authenticate. Anyone on a relay subnet can make a MAC address appear. Set `NEW_DEVICE_STATE=local` if unknown machines should boot normally until an admin stages them. To stage a machine, pre-register its MAC or reset it to the hold loop.
-- `/files/iso/*` serves image contents without authentication. Don't upload images that contain secrets. Secrets belong in unattend templates, which are only reachable through per-deployment tokens.
-- Relay keys are stored as SHA-256 hashes. A key is shown once at creation or rotation.
-- Mutating API calls require the `X-Requested-With: netdispatch` header, and session cookies are `SameSite=Lax`, which together block CSRF.
-- The SMB share is read-only.
+- Booting machines can't sign in, so `/boot` and image downloads (`/files/…`) are open on your network. Anyone on a relay segment can make a device appear on the dashboard. Set `NEW_DEVICE_STATE=local` if unknown machines shouldn't wait on the hold screen.
+- Image contents are downloadable without signing in, so **put secrets in unattend templates, not in images**. A machine's unattend file, and the share credentials WinPE uses, are only reachable through a random, single-deployment link. The link stops working as soon as that deployment ends.
+- The Windows install share is read-only and requires a password. Guest access is refused.
+- Relay keys are stored hashed and shown only once.
+- The dashboard is protected against cross-site request forgery.
 
-## Development
+## Limitations
 
-```bash
-# Unit/integration tests (in Docker, no local Python needed)
-docker build --target test -t netdispatch-test server/ && docker run --rm netdispatch-test
+- Machines must be x86: legacy BIOS, or 64-bit UEFI. 32-bit UEFI and ARM devices aren't supported yet.
+- UEFI **Secure Boot must be disabled** on machines being booted. netdispatch's iPXE and wimboot aren't signed by Microsoft.
+- Relays don't cache images. Remote sites download them from the hub, so large Windows images cross the WAN link.
+- The dashboard shows when a payload was served and when the machine returned. It doesn't show progress inside Windows Setup.
+- There is a single administrator role.
 
-# Local run without Docker (static CSS is built in the Dockerfile; UI will be unstyled)
-cd server && pip install -r requirements-dev.txt
-DATA_DIR=./data-dev FALLBACK_ADMIN_PASSWORD=dev uvicorn app.main:create_app --factory --reload
-```
+---
 
-Layout:
-
-| Path | Contents |
-|---|---|
-| `server/app/main.py` | app factory, middleware wiring |
-| `server/app/auth.py` | OIDC, auto-SSO session guard, local admin |
-| `server/app/pxe_engine.py` | iPXE script generation |
-| `server/app/routers/boot.py` | `/boot` state machine |
-| `server/app/iso_tools.py` | extraction, detection, safe path resolution |
-| `server/app/winpe.py` | WinPE launch script |
-| `server/app/unattend.py` | template storage and rendering |
-| `server/app/templates/` | dashboard (Tailwind + Alpine.js, compiled at image build, no CDN at runtime) |
-| `relay/` | dnsmasq entrypoint, heartbeat, iPXE build (pinned `v2.0.0`, embedded script) |
-| `samba/` | SMB sidecar |
-| `examples/unattend/` | sample autounattend.xml templates |
-
-## Limitations (v1)
-
-- x86 clients only (BIOS and UEFI x64). There are no ARM64 UEFI iPXE builds yet.
-- Relays don't cache payloads. Remote sites download images from the hub over the WAN.
-- There is no progress reporting from inside WinPE or Setup. The dashboard shows when the payload was served and when the device came back.
-- There is a single admin role.
+Developing netdispatch or using an AI coding agent on it? Start with [AGENTS.md](AGENTS.md).
 
 ## License
 
