@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: dark; }
+  ::selection { background: rgb(16 185 129 / 0.35); }
+  * { scrollbar-color: #334155 transparent; }
+}

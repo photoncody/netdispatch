@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-950">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · netdispatch</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+</head>
+<body class="h-full text-slate-200 antialiased">
+  <main class="flex min-h-full items-center justify-center px-4 py-12">
+    <div class="w-full max-w-sm">
+      <div class="mb-8 flex items-center justify-center gap-3">
+        <img src="/static/favicon.svg" alt="" class="h-9 w-9">
+        <span class="font-mono text-2xl font-semibold tracking-tight text-slate-100">net<span class="text-emerald-400">dispatch</span></span>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl shadow-black/40">
+        <h1 class="mb-1 text-lg font-semibold text-slate-100">Sign in</h1>
+        <p class="mb-6 text-sm text-slate-400">PXE boot coordination console</p>
+
+        {% if error %}
+        <div class="mb-5 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{{ error }}</div>
+        {% endif %}
+
+        {% if sso_available %}
+        <a href="/auth/oidc/login?next={{ next|urlencode }}"
+           class="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300">
+          Continue with {{ sso_name }}
+        </a>
+        {% endif %}
+
+        {% if local_available %}
+          {% if sso_available and not show_local %}
+          <p class="mt-5 text-center text-xs text-slate-500">
+            SSO unavailable? <a class="text-slate-300 underline decoration-slate-600 underline-offset-2 hover:text-emerald-300" href="/login?local=true&next={{ next|urlencode }}">Use the local admin login</a>
+          </p>
+          {% else %}
+            {% if sso_available %}
+            <div class="my-5 flex items-center gap-3 text-xs uppercase tracking-wider text-slate-500">
+              <div class="h-px flex-1 bg-slate-800"></div>emergency local login<div class="h-px flex-1 bg-slate-800"></div>
+            </div>
+            {% endif %}
+            <form method="post" action="/login" class="space-y-4">
+              <input type="hidden" name="next" value="{{ next }}">
+              <div>
+                <label for="username" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-400">Username</label>
+                <input id="username" name="username" autocomplete="username" required value="{{ username }}"
+                       class="block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              </div>
+              <div>
+                <label for="password" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-400">Password</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required autofocus
+                       class="block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              </div>
+              <button type="submit"
+                      class="w-full rounded-md {% if sso_available %}border border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700{% else %}bg-emerald-500 text-slate-950 hover:bg-emerald-400{% endif %} px-4 py-2.5 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300">
+                Sign in
+              </button>
+            </form>
+          {% endif %}
+        {% endif %}
+
+        {% if not sso_available and not local_available %}
+        <p class="text-sm text-amber-200">No login method is configured. Set <code class="font-mono">OIDC_ENABLED</code> or enable the local fallback admin.</p>
+        {% endif %}
+      </div>
+    </div>
+  </main>
+</body>
+</html>

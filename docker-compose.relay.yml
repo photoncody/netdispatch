@@ -1,0 +1,34 @@
+# netdispatch PXE relay (spoke) - deploy one per subnet / VLAN.
+#
+# Requirements:
+#   * a Linux host with an interface on the target subnet (Docker Desktop on
+#     Windows/macOS cannot receive DHCP broadcasts through host networking)
+#   * nothing else on that host answering DHCP (port 67) or TFTP (port 69)
+#   * the hub reachable from the host AND from PXE clients at CENTRAL_SERVER_URL
+#
+# Create the relay in the hub UI (Relays -> Add relay) to get RELAY_ID and a
+# per-relay RELAY_API_KEY, then:
+#
+#   cp .env.example .env    # set the RELAY_* variables
+#   docker compose -f docker-compose.relay.yml up -d --build
+name: netdispatch-relay
+
+services:
+  relay:
+    build: ./relay
+    image: netdispatch-relay:local
+    container_name: netdispatch-relay
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    environment:
+      CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:?set CENTRAL_SERVER_URL}
+      RELAY_ID: ${RELAY_ID:?set RELAY_ID}
+      RELAY_NAME: ${RELAY_NAME:-}
+      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY}
+      RELAY_INTERFACE: ${RELAY_INTERFACE:-}
+      SUBNET_RANGE: ${SUBNET_RANGE:-}
+      UEFI_BOOTFILE: ${UEFI_BOOTFILE:-ipxe.efi}
+      IPXE_CLIENTS: ${IPXE_CLIENTS:-chainload}
+      RELAY_LOG_DHCP: ${RELAY_LOG_DHCP:-true}
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-30}

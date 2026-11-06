@@ -1,0 +1,11 @@
+.env
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+server/app/static/app.css
+server/app/static/alpine.min.js
+relay/certs/*.pem
+relay/certs/*.crt
