@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-950">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>netdispatch</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+  <style>[x-cloak]{display:none !important}</style>
+  <script>window.ND_CONFIG = {{ config|tojson }};</script>
+  <script defer src="/static/alpine.min.js?v={{ asset_version }}"></script>
+</head>
+<body class="min-h-full text-slate-200 antialiased" x-data="netdispatch()" x-init="init()">
+
+<!-- ================================================================ header -->
+<header class="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
+  <div class="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3 sm:px-6">
+    <a href="/" class="flex items-center gap-2.5">
+      <img src="/static/favicon.svg" alt="" class="h-7 w-7">
+      <span class="font-mono text-lg font-semibold tracking-tight text-slate-100">net<span class="text-emerald-400">dispatch</span></span>
+    </a>
+    <nav class="flex gap-1 overflow-x-auto text-sm">
+      <template x-for="t in tabs" :key="t.id">
+        <button type="button" @click="setTab(t.id)"
+                class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition"
+                :class="tab === t.id ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'">
+          <span x-text="t.label"></span>
+          <span x-show="t.badge && t.badge()" x-text="t.badge && t.badge()"
+                class="ml-1.5 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300"></span>
+        </button>
+      </template>
+    </nav>
+    <div class="ml-auto flex items-center gap-3 text-sm">
+      <span class="hidden items-center gap-1.5 text-xs text-slate-500 md:flex" :title="'Last refresh ' + (lastRefresh ? lastRefresh.toLocaleTimeString() : '-')">
+        <span class="h-1.5 w-1.5 rounded-full" :class="refreshError ? 'bg-rose-500' : 'bg-emerald-500 animate-pulse'"></span>
+        <span x-text="refreshError ? 'disconnected' : 'live'"></span>
+      </span>
+      <span class="hidden text-slate-400 sm:inline" x-text="cfg.user"></span>
+      <a href="/logout" class="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100">Sign out</a>
+    </div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+  {% for w in warnings %}
+  <div class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">⚠ {{ w }}</div>
+  {% endfor %}
+
+  <!-- ============================================================ devices -->
+  <section x-show="tab === 'devices'" x-cloak>
+    <div class="mb-4 flex flex-wrap items-end gap-3">
+      <div>
+        <h2 class="text-xl font-semibold text-slate-100">Devices</h2>
+        <p class="text-sm text-slate-400">Machines that have PXE-booted through a relay. Waiting devices loop until you dispatch a payload.</p>
+      </div>
+      <div class="ml-auto flex flex-wrap items-center gap-2">
+        <input type="search" x-model="deviceFilter" placeholder="Filter MAC, IP, label, relay…"
+               class="w-56 rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm placeholder-slate-500 focus:border-emerald-500 focus:outline-none">
+        <select x-model="statusFilter" class="rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm focus:border-emerald-500 focus:outline-none">
+          <option value="">All states</option>
+          <option value="waiting">Waiting</option>
+          <option value="deploying">Deploying</option>
+          <option value="booting">Booting</option>
+          <option value="local">Local boot</option>
+          <option value="offline">Offline</option>
+        </select>
+        <button type="button" @click="openAddDevice()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500">+ Pre-register MAC</button>
+      </div>
+    </div>
+
+    <div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <template x-for="s in statusSummary()" :key="s.key">
+        <button type="button" @click="statusFilter = statusFilter === s.key ? '' : s.key"
+                class="rounded-lg border bg-slate-900/60 px-3 py-2 text-left transition hover:border-slate-600"
+                :class="statusFilter === s.key ? 'border-emerald-500/60' : 'border-slate-800'">
+          <div class="text-xs uppercase tracking-wider text-slate-500" x-text="s.label"></div>
+          <div class="font-mono text-2xl font-semibold" :class="s.color" x-text="s.count"></div>
+        </button>
+      </template>
+    </div>
+
+    <div class="overflow-hidden rounded-lg border border-slate-800">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-800 text-sm">
+          <thead class="bg-slate-900 text-left text-xs uppercase tracking-wider text-slate-400">
+            <tr>
+              <th class="px-4 py-2.5 font-medium">MAC / Label</th>
+              <th class="px-4 py-2.5 font-medium">Client IP</th>
+              <th class="px-4 py-2.5 font-medium">Relay / Site</th>
+              <th class="px-4 py-2.5 font-medium">Firmware</th>
+              <th class="px-4 py-2.5 font-medium">Last seen</th>
+              <th class="px-4 py-2.5 font-medium">Status</th>
+              <th class="px-4 py-2.5 font-medium">Payload</th>
+              <th class="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/80 bg-slate-950">
+            <template x-for="d in filteredDevices()" :key="d.id">
+              <tr class="hover:bg-slate-900/50">
+                <td class="px-4 py-2.5">
+                  <div class="font-mono text-slate-100" x-text="d.mac"></div>
+                  <div class="text-xs text-slate-500" x-text="d.label || '—'"></div>
+                </td>
+                <td class="px-4 py-2.5 font-mono text-slate-300" x-text="d.ip || '—'"></td>
+                <td class="px-4 py-2.5">
+                  <span x-show="d.relay_id" class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200">
+                    <span class="h-1.5 w-1.5 rounded-full" :class="relayOnline(d.relay_id) ? 'bg-emerald-400' : 'bg-slate-500'"></span>
+                    <span x-text="d.relay_name || d.relay_id"></span>
+                  </span>
+                  <span x-show="!d.relay_id" class="text-xs text-slate-500">—</span>
+                </td>
+                <td class="px-4 py-2.5 text-xs text-slate-400"><span x-text="d.platform || '—'"></span><span x-show="d.arch" x-text="' / ' + d.arch"></span></td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-slate-300" :title="d.last_seen || ''" x-text="ago(d.last_seen)"></td>
+                <td class="px-4 py-2.5">
+                  <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="statusClass(d.status)">
+                    <span class="h-1.5 w-1.5 rounded-full" :class="statusDot(d.status)"></span>
+                    <span x-text="statusLabel(d.status)"></span>
+                  </span>
+                  <div class="mt-0.5 max-w-[16rem] truncate text-[11px] text-slate-500" :title="d.last_event" x-text="d.last_event"></div>
+                </td>
+                <td class="max-w-[14rem] px-4 py-2.5 text-slate-300">
+                  <div class="truncate" :title="d.iso_name" x-text="d.iso_name || '—'"></div>
+                  <div x-show="d.unattend_name" class="text-xs text-slate-500" x-text="'+ ' + d.unattend_name"></div>
+                </td>
+                <td class="px-4 py-2.5 text-right">
+                  <button type="button" @click="openDispatch(d)"
+                          class="whitespace-nowrap rounded-md bg-emerald-500/90 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400">Dispatch / Configure</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="filteredDevices().length === 0">
+              <td colspan="8" class="px-4 py-12 text-center text-slate-500">
+                <span x-show="devices.length === 0">No devices yet. PXE-boot a machine on a subnet with a relay and it will appear here.</span>
+                <span x-show="devices.length > 0">No devices match the filter.</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= relays -->
+  <section x-show="tab === 'relays'" x-cloak>
+    <div class="mb-4 flex flex-wrap items-end gap-3">
+      <div>
+        <h2 class="text-xl font-semibold text-slate-100">Relays</h2>
+        <p class="text-sm text-slate-400">ProxyDHCP + TFTP spokes. Each relay heartbeats every 30 seconds; it's shown offline after <span x-text="cfg.relay_offline_seconds"></span>s of silence.</p>
+      </div>
+      <button type="button" @click="openAddRelay()" class="ml-auto rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">+ Add relay</button>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <template x-for="r in relays" :key="r.id">
+        <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+          <div class="flex items-start gap-3">
+            <span class="mt-1.5 h-2.5 w-2.5 flex-none rounded-full" :class="r.online ? 'bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60' : 'bg-slate-600'"></span>
+            <div class="min-w-0 flex-1">
+              <div class="truncate font-semibold text-slate-100" x-text="r.name"></div>
+              <div class="font-mono text-xs text-slate-500" x-text="r.id"></div>
+            </div>
+            <span class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                  :class="!r.enabled ? 'bg-slate-700 text-slate-300' : (r.online ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300')"
+                  x-text="!r.enabled ? 'disabled' : (r.online ? 'online' : 'offline')"></span>
+          </div>
+          <dl class="mt-4 grid grid-cols-3 gap-y-1.5 text-xs">
+            <dt class="text-slate-500">IP</dt><dd class="col-span-2 font-mono text-slate-300" x-text="r.ip_address || '—'"></dd>
+            <dt class="text-slate-500">Subnet</dt><dd class="col-span-2 font-mono text-slate-300" x-text="r.subnet || '—'"></dd>
+            <dt class="text-slate-500">Interface</dt><dd class="col-span-2 font-mono text-slate-300" x-text="r.interface || '—'"></dd>
+            <dt class="text-slate-500">dnsmasq</dt><dd class="col-span-2" :class="r.dnsmasq_ok === false ? 'text-rose-300' : 'text-slate-300'" x-text="r.dnsmasq_ok === null ? '—' : (r.dnsmasq_ok ? 'running' : 'NOT running')"></dd>
+            <dt class="text-slate-500">Last seen</dt><dd class="col-span-2 text-slate-300" :title="r.last_seen || ''" x-text="ago(r.last_seen)"></dd>
+            <dt class="text-slate-500">Devices</dt><dd class="col-span-2 text-slate-300" x-text="devices.filter(d => d.relay_id === r.id).length"></dd>
+          </dl>
+          <div x-show="r.auto_registered" class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">Auto-registered with the bootstrap key. Rotate to issue a per-relay key.</div>
+          <div class="mt-4 flex flex-wrap gap-2 text-xs">
+            <button type="button" @click="showCompose(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Compose snippet</button>
+            <button type="button" @click="rotateKey(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Rotate key</button>
+            <button type="button" @click="toggleRelay(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500" x-text="r.enabled ? 'Disable' : 'Enable'"></button>
+            <button type="button" @click="deleteRelay(r)" class="rounded border border-rose-500/40 px-2 py-1 text-rose-300 hover:border-rose-400">Delete</button>
+          </div>
+        </div>
+      </template>
+      <div x-show="relays.length === 0" class="col-span-full rounded-lg border border-dashed border-slate-700 p-10 text-center text-slate-500">
+        No relays registered. Click <span class="text-slate-300">Add relay</span> to get a ready-made compose file for a subnet.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= images -->
+  <section x-show="tab === 'images'" x-cloak>
+    <div class="mb-4 flex flex-wrap items-end gap-3">
+      <div>
+        <h2 class="text-xl font-semibold text-slate-100">Images</h2>
+        <p class="text-sm text-slate-400">ISOs are extracted after upload and their boot profile is detected automatically. Edit a profile to adjust kernel arguments or WIM paths.</p>
+      </div>
+      <div class="ml-auto flex gap-2">
+        <button type="button" @click="rescanIsos()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Rescan /data/isos</button>
+        <label class="cursor-pointer rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">
+          Upload ISO<input type="file" accept=".iso,.img" class="hidden" @change="uploadIso($event)">
+        </label>
+      </div>
+    </div>
+
+    <template x-for="u in uploads" :key="u.id">
+      <div class="mb-3 rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm">
+        <div class="flex justify-between"><span class="font-mono" x-text="u.name"></span><span class="text-slate-400" x-text="u.error ? u.error : (u.pct + '%  ·  ' + fmtSize(u.loaded) + ' / ' + fmtSize(u.total))"></span></div>
+        <div class="mt-1.5 h-1.5 overflow-hidden rounded bg-slate-800"><div class="h-full transition-all" :class="u.error ? 'bg-rose-500' : 'bg-emerald-500'" :style="'width:' + u.pct + '%'"></div></div>
+      </div>
+    </template>
+
+    <div class="overflow-hidden rounded-lg border border-slate-800">
+      <table class="min-w-full divide-y divide-slate-800 text-sm">
+        <thead class="bg-slate-900 text-left text-xs uppercase tracking-wider text-slate-400">
+          <tr>
+            <th class="px-4 py-2.5 font-medium">Name</th>
+            <th class="px-4 py-2.5 font-medium">Size</th>
+            <th class="px-4 py-2.5 font-medium">Status</th>
+            <th class="px-4 py-2.5 font-medium">Boot profile</th>
+            <th class="px-4 py-2.5"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/80 bg-slate-950">
+          <template x-for="i in isos" :key="i.id">
+            <tr class="hover:bg-slate-900/50">
+              <td class="px-4 py-2.5">
+                <div class="text-slate-100" x-text="i.name"></div>
+                <div class="font-mono text-xs text-slate-500" x-text="i.filename"></div>
+              </td>
+              <td class="px-4 py-2.5 font-mono text-slate-300" x-text="fmtSize(i.size)"></td>
+              <td class="px-4 py-2.5">
+                <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="isoStatusClass(i.status)" x-text="i.status"></span>
+                <div class="mt-0.5 max-w-xs truncate text-[11px] text-slate-500" :title="i.status_message" x-text="i.status_message"></div>
+              </td>
+              <td class="px-4 py-2.5">
+                <div class="font-mono text-xs text-emerald-300" x-text="i.boot_method"></div>
+                <div class="text-xs text-slate-500" x-text="i.detected_os || '—'"></div>
+              </td>
+              <td class="whitespace-nowrap px-4 py-2.5 text-right text-xs">
+                <button type="button" @click="openIsoEditor(i)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Edit profile</button>
+                <button type="button" @click="deleteIso(i)" class="ml-1 rounded border border-rose-500/40 px-2 py-1 text-rose-300 hover:border-rose-400">Delete</button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="isos.length === 0"><td colspan="5" class="px-4 py-12 text-center text-slate-500">No images yet. Upload an ISO, or copy files into <span class="font-mono">/data/isos</span> and click Rescan.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- =========================================================== unattend -->
+  <section x-show="tab === 'unattend'" x-cloak>
+    <div class="mb-4 flex flex-wrap items-end gap-3">
+      <div>
+        <h2 class="text-xl font-semibold text-slate-100">Unattend templates</h2>
+        <p class="text-sm text-slate-400">autounattend.xml templates, injected into WinPE by wimboot when bound to a Windows Setup deployment. Stored in <span class="font-mono">/data/configs</span>.</p>
+      </div>
+      <div class="ml-auto flex gap-2">
+        <label class="cursor-pointer rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">
+          Import .xml<input type="file" accept=".xml" class="hidden" @change="importUnattend($event)">
+        </label>
+        <button type="button" @click="newUnattend()" class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">+ New template</button>
+      </div>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-[16rem_1fr]">
+      <div class="space-y-1">
+        <template x-for="u in unattends" :key="u.id">
+          <button type="button" @click="editUnattend(u)"
+                  class="block w-full rounded-md border px-3 py-2 text-left text-sm transition"
+                  :class="ua.id === u.id ? 'border-emerald-500/60 bg-slate-900' : 'border-slate-800 hover:border-slate-700'">
+            <div class="truncate text-slate-100" x-text="u.name"></div>
+            <div class="truncate font-mono text-[11px] text-slate-500" x-text="u.filename + (u.missing ? ' (missing)' : '')"></div>
+          </button>
+        </template>
+        <div x-show="unattends.length === 0" class="rounded-md border border-dashed border-slate-700 p-4 text-center text-xs text-slate-500">No templates yet.</div>
+      </div>
+      <div x-show="ua.open" class="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="text-xs uppercase tracking-wider text-slate-400">Name
+            <input x-model="ua.name" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+          <label class="text-xs uppercase tracking-wider text-slate-400">Description
+            <input x-model="ua.description" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+        </div>
+        <textarea x-model="ua.content" spellcheck="false" rows="22"
+                  class="mt-3 block w-full rounded-md border border-slate-700 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-200 focus:border-emerald-500 focus:outline-none"></textarea>
+        <div class="mt-2 text-xs text-slate-500">
+          Variables (Jinja2, XML-escaped):
+          <template x-for="(desc, key) in uaVars" :key="key">
+            <span class="mr-2 whitespace-nowrap"><code class="font-mono text-emerald-300" x-text="'{' + '{ ' + key + ' }' + '}'"></code> <span x-text="desc"></span>;</span>
+          </template>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button type="button" @click="saveUnattend()" class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Save</button>
+          <button type="button" x-show="ua.id" @click="previewUnattend()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Preview rendered</button>
+          <button type="button" x-show="ua.id" @click="deleteUnattend()" class="ml-auto rounded-md border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:border-rose-400">Delete</button>
+        </div>
+        <pre x-show="ua.preview" class="mt-3 max-h-80 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-slate-300" x-text="ua.preview"></pre>
+      </div>
+      <div x-show="!ua.open" class="flex items-center justify-center rounded-lg border border-dashed border-slate-800 p-10 text-sm text-slate-500">Select a template or create a new one.</div>
+    </div>
+  </section>
+
+  <footer class="mt-10 border-t border-slate-900 pt-4 text-xs text-slate-600">
+    netdispatch <span x-text="cfg.version"></span> · boot URL <span class="font-mono" x-text="cfg.boot_url"></span> · <a href="/docs" class="hover:text-slate-400">API docs</a>
+  </footer>
+</main>
+
+<!-- ======================================================== dispatch modal -->
+<div x-show="dispatch.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16" @keydown.escape.window="dispatch.open = false">
+  <div class="w-full max-w-2xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="dispatch.open = false">
+    <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+      <div>
+        <h3 class="font-semibold text-slate-100">Dispatch / Configure</h3>
+        <p class="font-mono text-xs text-slate-400"><span x-text="dispatch.device.mac"></span> · <span x-text="dispatch.device.ip || 'no IP'"></span> · <span x-text="dispatch.device.relay_name || dispatch.device.relay_id || 'no relay'"></span></p>
+      </div>
+      <button type="button" @click="dispatch.open = false" class="text-slate-400 hover:text-slate-100">✕</button>
+    </div>
+    <div class="space-y-4 px-5 py-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-slate-400">Current state:</span>
+        <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset" :class="statusClass(dispatch.device.status)">
+          <span class="h-1.5 w-1.5 rounded-full" :class="statusDot(dispatch.device.status)"></span><span x-text="statusLabel(dispatch.device.status)"></span>
+        </span>
+        <span class="truncate text-xs text-slate-500" x-text="dispatch.device.last_event"></span>
+      </div>
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Label / hostname
+        <input x-model="dispatch.label" placeholder="e.g. LAB-PC-07" maxlength="128"
+               class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+        <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Available as <code class="font-mono">{{ '{{ hostname }}' }}</code> in unattend templates (first 15 characters).</span>
+      </label>
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Image
+        <select x-model.number="dispatch.iso_id" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          <option value="">— select an image —</option>
+          <template x-for="i in isos.filter(x => x.status === 'ready')" :key="i.id">
+            <option :value="i.id" x-text="i.name + '  [' + i.boot_method + ']'" :selected="i.id === dispatch.iso_id"></option>
+          </template>
+        </select>
+      </label>
+      <label x-show="selectedIso() && selectedIso().boot_method === 'windows_setup'" class="block text-xs uppercase tracking-wider text-slate-400">autounattend.xml template (optional)
+        <select x-model="dispatch.unattend_id" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          <option value="">— none (interactive Setup) —</option>
+          <template x-for="u in unattends" :key="u.id">
+            <option :value="String(u.id)" x-text="u.name" :selected="String(u.id) === dispatch.unattend_id"></option>
+          </template>
+        </select>
+      </label>
+      <div x-show="selectedIso() && selectedIso().boot_method === 'windows_setup'" class="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-400">
+        WinPE will map <span class="font-mono text-slate-300" x-text="'\\\\' + cfg.smb_host + '\\' + cfg.smb_share + '\\' + dispatch.iso_id"></span> and run Setup from it.
+      </div>
+      <fieldset class="text-sm">
+        <legend class="mb-1 text-xs uppercase tracking-wider text-slate-400">After the payload boots, the next PXE request should…</legend>
+        <label class="mr-5 inline-flex items-center gap-2"><input type="radio" value="local" x-model="dispatch.after_deploy" class="accent-emerald-500"> boot from local disk <span class="text-xs text-slate-500">(recommended for installs)</span></label>
+        <label class="inline-flex items-center gap-2"><input type="radio" value="wait" x-model="dispatch.after_deploy" class="accent-emerald-500"> return to the hold loop</label>
+      </fieldset>
+      <details class="text-xs text-slate-400" @toggle="$event.target.open && loadScriptPreview()">
+        <summary class="cursor-pointer select-none hover:text-slate-200">Preview the iPXE script for the current state</summary>
+        <pre class="mt-2 max-h-64 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-slate-300" x-text="dispatch.script || 'loading…'"></pre>
+      </details>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 border-t border-slate-800 px-5 py-3">
+      <button type="button" @click="deleteDevice()" class="rounded-md border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:border-rose-400">Forget device</button>
+      <div class="ml-auto flex flex-wrap gap-2">
+        <button type="button" @click="deviceAction('local')" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Boot local</button>
+        <button type="button" @click="deviceAction('reset')" class="rounded-md border border-amber-500/50 px-3 py-1.5 text-sm text-amber-200 hover:border-amber-400">Reset to hold loop</button>
+        <button type="button" @click="deployNow()" :disabled="!dispatch.iso_id"
+                class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40">Deploy now</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ relay modal -->
+<div x-show="relayModal.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16" @keydown.escape.window="relayModal.open = false">
+  <div class="w-full max-w-2xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="relayModal.open = false">
+    <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+      <h3 class="font-semibold text-slate-100" x-text="relayModal.title"></h3>
+      <button type="button" @click="relayModal.open = false" class="text-slate-400 hover:text-slate-100">✕</button>
+    </div>
+    <div class="space-y-4 px-5 py-4">
+      <template x-if="relayModal.mode === 'create'">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="text-xs uppercase tracking-wider text-slate-400">Relay ID
+            <input x-model="relayModal.id" placeholder="site-office-vlan20" pattern="[a-z0-9][a-z0-9._-]*"
+                   class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+            <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">lowercase letters, digits, . _ -</span>
+          </label>
+          <label class="text-xs uppercase tracking-wider text-slate-400">Display name
+            <input x-model="relayModal.name" placeholder="Office – VLAN 20"
+                   class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+        </div>
+      </template>
+      <template x-if="relayModal.key">
+        <div class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+          <div class="mb-1 font-semibold">Relay key — shown only once</div>
+          <code class="block break-all font-mono text-xs" x-text="relayModal.key"></code>
+        </div>
+      </template>
+      <template x-if="relayModal.compose">
+        <div>
+          <div class="mb-1 flex items-center justify-between text-xs uppercase tracking-wider text-slate-400">
+            <span>docker-compose.yml for the remote host</span>
+            <button type="button" @click="copy(relayModal.compose)" class="rounded border border-slate-700 px-2 py-0.5 normal-case tracking-normal text-slate-200 hover:border-slate-500">Copy</button>
+          </div>
+          <pre class="max-h-96 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-200" x-text="relayModal.compose"></pre>
+          <p class="mt-2 text-xs text-slate-500">Save it on a Linux host attached to the target subnet and run <code class="font-mono text-slate-300">docker compose up -d --build</code>. The relay answers PXE clients through ProxyDHCP, so your existing DHCP server is left alone.</p>
+        </div>
+      </template>
+    </div>
+    <div class="flex justify-end gap-2 border-t border-slate-800 px-5 py-3">
+      <button type="button" @click="relayModal.open = false" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500" x-text="relayModal.mode === 'create' ? 'Cancel' : 'Close'"></button>
+      <button type="button" x-show="relayModal.mode === 'create'" @click="createRelay()" class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Create relay</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ ISO editor -->
+<div x-show="isoEdit.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-12" @keydown.escape.window="isoEdit.open = false">
+  <div class="w-full max-w-3xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="isoEdit.open = false">
+    <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+      <div>
+        <h3 class="font-semibold text-slate-100">Boot profile</h3>
+        <p class="font-mono text-xs text-slate-400" x-text="isoEdit.data.filename"></p>
+      </div>
+      <button type="button" @click="isoEdit.open = false" class="text-slate-400 hover:text-slate-100">✕</button>
+    </div>
+    <datalist id="iso-files"><template x-for="f in isoEdit.files" :key="f"><option :value="f"></option></template></datalist>
+    <div class="space-y-4 px-5 py-4 text-sm">
+      <div class="grid gap-3 sm:grid-cols-2">
+        <label class="text-xs uppercase tracking-wider text-slate-400">Display name
+          <input x-model="isoEdit.data.name" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+        </label>
+        <label class="text-xs uppercase tracking-wider text-slate-400">Boot method
+          <select x-model="isoEdit.data.boot_method" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+            <option value="windows_setup">windows_setup — wimboot + SMB + Setup</option>
+            <option value="winpe">winpe — wimboot only (Hiren's, custom PE)</option>
+            <option value="linux">linux — kernel + initrd + cmdline</option>
+            <option value="sanboot">sanboot — raw ISO over HTTP</option>
+            <option value="memdisk">memdisk — raw ISO in RAM (BIOS only)</option>
+          </select>
+        </label>
+      </div>
+      <template x-if="isoEdit.data.boot_method === 'windows_setup' || isoEdit.data.boot_method === 'winpe'">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <template x-for="f in [['bcd_path','BCD'],['boot_sdi_path','boot.sdi'],['boot_wim_path','boot.wim']]" :key="f[0]">
+            <label class="text-xs uppercase tracking-wider text-slate-400"><span x-text="f[1]"></span>
+              <input x-model="isoEdit.data[f[0]]" list="iso-files" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+            </label>
+          </template>
+          <label x-show="isoEdit.data.boot_method === 'windows_setup'" class="text-xs uppercase tracking-wider text-slate-400">Setup executable (on the share)
+            <input x-model="isoEdit.data.setup_path" list="iso-files" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+        </div>
+      </template>
+      <template x-if="isoEdit.data.boot_method === 'linux'">
+        <div class="space-y-3">
+          <label class="block text-xs uppercase tracking-wider text-slate-400">Kernel
+            <input x-model="isoEdit.data.kernel_path" list="iso-files" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+          <label class="block text-xs uppercase tracking-wider text-slate-400">Initrd(s) — one per line
+            <textarea x-model="isoEdit.initrds" rows="2" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none"></textarea>
+          </label>
+          <label class="block text-xs uppercase tracking-wider text-slate-400">Kernel command line
+            <textarea x-model="isoEdit.data.cmdline" rows="3" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none"></textarea>
+            <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Placeholders: <code class="font-mono">{iso_url}</code> raw ISO, <code class="font-mono">{files_url}</code> extracted tree, <code class="font-mono">{base_url}</code>, <code class="font-mono">{mac}</code>, <code class="font-mono">{hostname}</code>, <code class="font-mono">{ip}</code>, <code class="font-mono">{relay}</code>.</span>
+          </label>
+        </div>
+      </template>
+      <p x-show="isoEdit.data.boot_method === 'sanboot' || isoEdit.data.boot_method === 'memdisk'" class="text-xs text-slate-400">
+        The raw ISO is served over HTTP. sanboot works for many UEFI-bootable ISOs and diagnostic tools; memdisk loads the whole image into RAM and only works on BIOS clients with small images. Most full Linux distributions need the <span class="font-mono">linux</span> method instead.
+      </p>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <button type="button" @click="isoAction('redetect')" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Re-run auto-detection</button>
+        <button type="button" @click="isoAction('reextract')" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Re-extract ISO</button>
+        <span class="self-center text-slate-500" x-text="isoEdit.files.length ? isoEdit.files.length + ' files in extracted tree' : ''"></span>
+      </div>
+    </div>
+    <div class="flex justify-end gap-2 border-t border-slate-800 px-5 py-3">
+      <button type="button" @click="isoEdit.open = false" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Cancel</button>
+      <button type="button" @click="saveIso()" class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Save profile</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================= add device -->
+<div x-show="addDevice.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center bg-black/70 p-4 pt-24" @keydown.escape.window="addDevice.open = false">
+  <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl" @click.outside="addDevice.open = false">
+    <h3 class="mb-3 font-semibold text-slate-100">Pre-register a device</h3>
+    <p class="mb-4 text-xs text-slate-400">Stage a deployment before the machine first boots. It will pick up the dispatch on its first PXE request.</p>
+    <label class="block text-xs uppercase tracking-wider text-slate-400">MAC address
+      <input x-model="addDevice.mac" placeholder="52:54:00:12:34:56" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+    </label>
+    <label class="mt-3 block text-xs uppercase tracking-wider text-slate-400">Label
+      <input x-model="addDevice.label" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+    </label>
+    <div class="mt-5 flex justify-end gap-2">
+      <button type="button" @click="addDevice.open = false" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Cancel</button>
+      <button type="button" @click="createDevice()" class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================== toasts -->
+<div class="fixed bottom-4 right-4 z-50 space-y-2">
+  <template x-for="t in toasts" :key="t.id">
+    <div class="max-w-sm rounded-md border px-4 py-2 text-sm shadow-lg"
+         :class="t.error ? 'border-rose-500/50 bg-rose-950 text-rose-100' : 'border-emerald-500/40 bg-slate-900 text-slate-100'" x-text="t.msg"></div>
+  </template>
+</div>
+
+<script>
+{% raw %}
+function netdispatch() {
+  return {
+    cfg: window.ND_CONFIG,
+    tab: 'devices',
+    tabs: [],
+    devices: [], relays: [], isos: [], unattends: [], uaVars: {},
+    deviceFilter: '', statusFilter: '',
+    lastRefresh: null, refreshError: false,
+    uploads: [], toasts: [],
+    dispatch: { open: false, device: {}, iso_id: '', unattend_id: '', label: '', after_deploy: 'local', script: '' },
+    relayModal: { open: false, mode: 'create', title: '', id: '', name: '', key: '', compose: '' },
+    isoEdit: { open: false, data: {}, initrds: '', files: [] },
+    addDevice: { open: false, mac: '', label: '' },
+    ua: { open: false, id: null, name: '', description: '', content: '', preview: '' },
+
+    init() {
+      this.tabs = [
+        { id: 'devices', label: 'Devices', badge: () => this.devices.filter(d => d.status === 'waiting').length || '' },
+        { id: 'relays', label: 'Relays', badge: () => this.relays.filter(r => r.enabled && !r.online).length || '' },
+        { id: 'images', label: 'Images' },
+        { id: 'unattend', label: 'Unattend' },
+      ];
+      const fromHash = location.hash.replace('#', '');
+      if (this.tabs.some(t => t.id === fromHash)) this.tab = fromHash;
+      window.addEventListener('hashchange', () => {
+        const h = location.hash.replace('#', '');
+        if (h !== this.tab && this.tabs.some(t => t.id === h)) this.setTab(h);
+      });
+      this.refresh(true);
+      this.loadUnattends();
+      this.api('GET', '/api/unattend/variables').then(v => this.uaVars = v).catch(() => {});
+      setInterval(() => this.refresh(false), 3000);
+    },
+
+    setTab(id) { this.tab = id; location.hash = id; if (id === 'unattend') this.loadUnattends(); if (id === 'images') this.loadIsos(); },
+
+    async api(method, url, body) {
+      const opts = { method, headers: { 'X-Requested-With': 'netdispatch' } };
+      if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+      const r = await fetch(url, opts);
+      if (r.status === 401) { location.href = '/login?next=' + encodeURIComponent('/' + location.hash); throw new Error('session expired'); }
+      if (!r.ok) {
+        let detail = r.statusText;
+        try { const j = await r.json(); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (e) {}
+        throw new Error(detail);
+      }
+      if (r.status === 204) return null;
+      const ct = r.headers.get('content-type') || '';
+      return ct.includes('application/json') ? r.json() : r.text();
+    },
+
+    toast(msg, error = false) {
+      const id = Date.now() + Math.random();
+      this.toasts.push({ id, msg, error });
+      setTimeout(() => this.toasts = this.toasts.filter(t => t.id !== id), error ? 7000 : 3500);
+    },
+
+    async refresh(full) {
+      try {
+        const [devices, relays] = await Promise.all([this.api('GET', '/api/devices'), this.api('GET', '/api/relays')]);
+        this.devices = devices; this.relays = relays;
+        if (full || this.tab === 'images' || this.isos.some(i => i.status === 'extracting' || i.status === 'uploading')) await this.loadIsos();
+        if (this.dispatch.open) {
+          const d = this.devices.find(x => x.id === this.dispatch.device.id);
+          if (d) this.dispatch.device = d;
+        }
+        this.lastRefresh = new Date(); this.refreshError = false;
+      } catch (e) { this.refreshError = true; }
+    },
+    async loadIsos() { this.isos = await this.api('GET', '/api/isos'); },
+    async loadUnattends() { try { this.unattends = await this.api('GET', '/api/unattend'); } catch (e) { this.toast(e.message, true); } },
+
+    // ---------------------------------------------------------- formatting
+    ago(ts) {
+      if (!ts) return 'never';
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(ts)) / 1000));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    },
+    fmtSize(n) {
+      if (!n) return '0 B';
+      const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+      while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+      return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+    },
+    statusLabel(s) { return ({ waiting: 'Waiting', deploying: 'Deploying', booting: 'Booting payload', local: 'Local boot', offline: 'Offline' })[s] || s; },
+    statusClass(s) {
+      return ({
+        waiting: 'bg-amber-500/10 text-amber-200 ring-amber-500/30',
+        deploying: 'bg-sky-500/10 text-sky-200 ring-sky-500/30',
+        booting: 'bg-violet-500/10 text-violet-200 ring-violet-500/30',
+        local: 'bg-slate-500/10 text-slate-300 ring-slate-500/30',
+        offline: 'bg-zinc-800/60 text-zinc-400 ring-zinc-600/40',
+      })[s] || 'bg-slate-800 text-slate-300 ring-slate-600';
+    },
+    statusDot(s) {
+      return ({ waiting: 'bg-amber-400 animate-pulse', deploying: 'bg-sky-400 animate-pulse', booting: 'bg-violet-400', local: 'bg-slate-400', offline: 'bg-zinc-600' })[s] || 'bg-slate-500';
+    },
+    isoStatusClass(s) {
+      return ({
+        ready: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30',
+        extracting: 'bg-sky-500/10 text-sky-200 ring-sky-500/30',
+        uploading: 'bg-sky-500/10 text-sky-200 ring-sky-500/30',
+        error: 'bg-rose-500/10 text-rose-300 ring-rose-500/30',
+        missing: 'bg-amber-500/10 text-amber-200 ring-amber-500/30',
+      })[s] || 'bg-slate-800 text-slate-300 ring-slate-600';
+    },
+    statusSummary() {
+      const c = k => this.devices.filter(d => d.status === k).length;
+      return [
+        { key: 'waiting', label: 'Waiting', count: c('waiting'), color: 'text-amber-300' },
+        { key: 'deploying', label: 'Deploying', count: c('deploying'), color: 'text-sky-300' },
+        { key: 'booting', label: 'Booting', count: c('booting'), color: 'text-violet-300' },
+        { key: 'local', label: 'Local boot', count: c('local'), color: 'text-slate-300' },
+        { key: 'offline', label: 'Offline', count: c('offline'), color: 'text-zinc-400' },
+      ];
+    },
+    relayOnline(id) { const r = this.relays.find(x => x.id === id); return r && r.online; },
+    filteredDevices() {
+      const q = this.deviceFilter.trim().toLowerCase();
+      return this.devices.filter(d => {
+        if (this.statusFilter && d.status !== this.statusFilter) return false;
+        if (!q) return true;
+        return [d.mac, d.ip, d.label, d.relay_id, d.relay_name, d.iso_name].some(v => v && String(v).toLowerCase().includes(q));
+      });
+    },
+    async copy(text) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      }
+      this.toast('Copied to clipboard');
+    },
+
+    // ------------------------------------------------------------ devices
+    openDispatch(d) {
+      this.dispatch = {
+        open: true, device: d, script: '',
+        iso_id: d.iso_id && this.isos.some(i => i.id === d.iso_id && i.status === 'ready') ? d.iso_id : '',
+        unattend_id: d.unattend_id ? String(d.unattend_id) : '',
+        label: d.label || '', after_deploy: d.after_deploy || 'local',
+      };
+      this.loadIsos(); this.loadUnattends();
+    },
+    selectedIso() { return this.isos.find(i => i.id === this.dispatch.iso_id); },
+    async loadScriptPreview() {
+      this.dispatch.script = '';
+      try { this.dispatch.script = await this.api('GET', `/api/devices/${this.dispatch.device.id}/script`); }
+      catch (e) { this.dispatch.script = 'error: ' + e.message; }
+    },
+    async deployNow() {
+      const iso = this.selectedIso();
+      if (!iso) return;
+      const body = {
+        iso_id: iso.id,
+        unattend_id: iso.boot_method === 'windows_setup' && this.dispatch.unattend_id ? Number(this.dispatch.unattend_id) : null,
+        label: this.dispatch.label, after_deploy: this.dispatch.after_deploy,
+      };
+      try {
+        await this.api('POST', `/api/devices/${this.dispatch.device.id}/deploy`, body);
+        this.toast(`Dispatched ${iso.name} to ${this.dispatch.device.mac}`);
+        this.dispatch.open = false; this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async deviceAction(action) {
+      try {
+        if (this.dispatch.label !== (this.dispatch.device.label || '')) {
+          await this.api('PATCH', `/api/devices/${this.dispatch.device.id}`, { label: this.dispatch.label });
+        }
+        await this.api('POST', `/api/devices/${this.dispatch.device.id}/${action}`);
+        this.toast(action === 'reset' ? 'Returned to hold loop' : 'Set to local boot');
+        this.dispatch.open = false; this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async deleteDevice() {
+      if (!confirm(`Forget device ${this.dispatch.device.mac}? It reappears if it PXE-boots again.`)) return;
+      try { await this.api('DELETE', `/api/devices/${this.dispatch.device.id}`); this.dispatch.open = false; this.refresh(false); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    openAddDevice() { this.addDevice = { open: true, mac: '', label: '' }; },
+    async createDevice() {
+      try {
+        await this.api('POST', '/api/devices', { mac: this.addDevice.mac, label: this.addDevice.label || null });
+        this.addDevice.open = false; this.toast('Device registered'); this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
+    },
+
+    // ------------------------------------------------------------- relays
+    openAddRelay() { this.relayModal = { open: true, mode: 'create', title: 'Add relay', id: '', name: '', key: '', compose: '' }; },
+    async createRelay() {
+      try {
+        const res = await this.api('POST', '/api/relays', { id: this.relayModal.id.trim(), name: this.relayModal.name.trim() || this.relayModal.id.trim() });
+        this.relayModal = { open: true, mode: 'show', title: `Relay ${res.relay.id} created`, key: res.key, compose: res.compose };
+        this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async showCompose(r) {
+      try {
+        const res = await this.api('GET', `/api/relays/${encodeURIComponent(r.id)}/compose`);
+        this.relayModal = { open: true, mode: 'show', title: `Compose snippet · ${r.id}`, key: '', compose: res.compose };
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async rotateKey(r) {
+      if (!confirm(`Issue a new key for ${r.id}? The current key stops working immediately.`)) return;
+      try {
+        const res = await this.api('POST', `/api/relays/${encodeURIComponent(r.id)}/rotate-key`);
+        this.relayModal = { open: true, mode: 'show', title: `New key for ${r.id}`, key: res.key, compose: res.compose };
+        this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async toggleRelay(r) {
+      try { await this.api('PATCH', `/api/relays/${encodeURIComponent(r.id)}`, { enabled: !r.enabled }); this.refresh(false); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async deleteRelay(r) {
+      if (!confirm(`Delete relay ${r.id}? A running relay with a valid bootstrap key would re-register itself.`)) return;
+      try { await this.api('DELETE', `/api/relays/${encodeURIComponent(r.id)}`); this.refresh(false); }
+      catch (e) { this.toast(e.message, true); }
+    },
+
+    // ------------------------------------------------------------- images
+    uploadIso(ev) {
+      const file = ev.target.files[0]; ev.target.value = '';
+      if (!file) return;
+      const up = { id: Date.now(), name: file.name, pct: 0, loaded: 0, total: file.size, error: '' };
+      this.uploads.push(up);
+      const entry = this.uploads[this.uploads.length - 1];
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/isos/upload');
+      xhr.setRequestHeader('X-Requested-With', 'netdispatch');
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = e => { if (e.lengthComputable) { entry.loaded = e.loaded; entry.pct = Math.floor(e.loaded / e.total * 100); } };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          this.toast(`${file.name} uploaded — extracting`);
+          this.uploads = this.uploads.filter(u => u.id !== entry.id);
+          this.loadIsos();
+        } else {
+          let msg = xhr.statusText; try { msg = JSON.parse(xhr.responseText).detail; } catch (e) {}
+          entry.error = 'failed: ' + msg; this.toast(`Upload failed: ${msg}`, true);
+          setTimeout(() => this.uploads = this.uploads.filter(u => u.id !== entry.id), 10000);
+        }
+      };
+      xhr.onerror = () => { entry.error = 'network error'; };
+      xhr.send(file);
+    },
+    async rescanIsos() {
+      try {
+        const res = await this.api('POST', '/api/isos/rescan');
+        this.toast(`Rescan: ${res.added.length} added, ${res.missing.length} missing`); this.loadIsos();
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async openIsoEditor(i) {
+      this.isoEdit = { open: true, data: JSON.parse(JSON.stringify(i)), initrds: (i.initrd_paths || []).join('\n'), files: [] };
+      try { this.isoEdit.files = await this.api('GET', `/api/isos/${i.id}/files`); } catch (e) {}
+    },
+    async saveIso() {
+      const d = this.isoEdit.data;
+      const body = {
+        name: d.name, boot_method: d.boot_method, kernel_path: d.kernel_path, cmdline: d.cmdline,
+        initrd_paths: this.isoEdit.initrds.split('\n').map(s => s.trim()).filter(Boolean),
+        bcd_path: d.bcd_path, boot_sdi_path: d.boot_sdi_path, boot_wim_path: d.boot_wim_path, setup_path: d.setup_path,
+      };
+      try { await this.api('PATCH', `/api/isos/${d.id}`, body); this.isoEdit.open = false; this.toast('Profile saved'); this.loadIsos(); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async isoAction(action) {
+      try {
+        const res = await this.api('POST', `/api/isos/${this.isoEdit.data.id}/${action}`);
+        if (action === 'redetect') { this.isoEdit.data = res; this.isoEdit.initrds = (res.initrd_paths || []).join('\n'); this.toast('Detection re-run'); }
+        else { this.isoEdit.open = false; this.toast('Re-extraction started'); }
+        this.loadIsos();
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async deleteIso(i) {
+      if (!confirm(`Delete ${i.name}? This removes the ISO file and its extracted tree.`)) return;
+      try { await this.api('DELETE', `/api/isos/${i.id}`); this.loadIsos(); }
+      catch (e) { this.toast(e.message, true); }
+    },
+
+    // ----------------------------------------------------------- unattend
+    newUnattend() {
+      this.ua = { open: true, id: null, name: 'New template', description: '', preview: '',
+        content: '<?xml version="1.0" encoding="utf-8"?>\n<unattend xmlns="urn:schemas-microsoft-com:unattend">\n  <settings pass="specialize">\n    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n      <ComputerName>{{ hostname }}</ComputerName>\n    </component>\n  </settings>\n</unattend>\n' };
+    },
+    async editUnattend(u) {
+      try {
+        const res = await this.api('GET', `/api/unattend/${u.id}`);
+        this.ua = { open: true, id: res.id, name: res.name, description: res.description || '', content: res.content, preview: '' };
+      } catch (e) { this.toast(e.message, true); }
+    },
+    importUnattend(ev) {
+      const file = ev.target.files[0]; ev.target.value = '';
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        this.ua = { open: true, id: null, name: file.name.replace(/\.xml$/i, ''), description: 'imported from ' + file.name, content: reader.result, preview: '' };
+        this.toast('Loaded — review and click Save');
+      };
+      reader.readAsText(file);
+    },
+    async saveUnattend() {
+      const body = { name: this.ua.name, description: this.ua.description || null, content: this.ua.content };
+      try {
+        const res = this.ua.id ? await this.api('PUT', `/api/unattend/${this.ua.id}`, body) : await this.api('POST', '/api/unattend', body);
+        this.ua.id = res.id; this.toast('Template saved'); this.loadUnattends();
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async previewUnattend() {
+      try { const res = await this.api('POST', `/api/unattend/${this.ua.id}/preview`); this.ua.preview = res.rendered; }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async deleteUnattend() {
+      if (!confirm(`Delete template ${this.ua.name}?`)) return;
+      try { await this.api('DELETE', `/api/unattend/${this.ua.id}`); this.ua = { open: false, id: null }; this.loadUnattends(); }
+      catch (e) { this.toast(e.message, true); }
+    },
+  };
+}
+{% endraw %}
+</script>
+</body>
+</html>

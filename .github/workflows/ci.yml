@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (shell + compose)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shellcheck
+        run: shellcheck relay/*.sh samba/*.sh server/*.sh tests/e2e/*.sh
+
+      - name: Validate compose files
+        run: |
+          docker compose -f docker-compose.yml --profile local-relay config --quiet
+          CENTRAL_SERVER_URL=http://hub.invalid RELAY_ID=ci RELAY_API_KEY=ci \
+            docker compose -f docker-compose.relay.yml config --quiet
+
+  test:
+    name: Server tests (pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds the Dockerfile's "test" stage: the same image as production
+      # (assets, 7-Zip, wimboot) plus pytest.
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          target: test
+          load: true
+          tags: netdispatch-test:ci
+          cache-from: type=gha,scope=server-test
+          cache-to: type=gha,mode=max,scope=server-test
+
+      - name: Run pytest
+        run: docker run --rm netdispatch-test:ci python -m pytest -q -W error::DeprecationWarning tests

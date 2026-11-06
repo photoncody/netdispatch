@@ -1,0 +1,60 @@
+# netdispatch central server (hub)
+#
+#   cp .env.example .env    # then edit PUBLIC_URL, SMB_PASSWORD, auth settings
+#   docker compose up -d --build
+#
+# Optional: also run a relay on this host (for the hub's own subnet):
+#   docker compose --profile local-relay up -d --build
+name: netdispatch
+
+services:
+  server:
+    build:
+      context: ./server
+      target: runtime
+    image: netdispatch-server:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+    ports:
+      - "${HUB_HTTP_PORT:-8000}:8000"
+    volumes:
+      - ${DATA_PATH:-./data}:/data
+
+  samba:
+    build: ./samba
+    image: netdispatch-samba:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      # WinPE's SMB client only talks to port 445; it must be reachable from
+      # every client subnet that installs Windows.
+      - "${SMB_BIND:-0.0.0.0}:445:445"
+    volumes:
+      - ${DATA_PATH:-./data}/extracted:/data/extracted:ro
+    depends_on:
+      - server
+
+  relay:
+    profiles: ["local-relay"]
+    build: ./relay
+    image: netdispatch-relay:local
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:-http://127.0.0.1:8000}
+      RELAY_ID: ${RELAY_ID:-hub-local}
+      RELAY_NAME: ${RELAY_NAME:-Hub local subnet}
+      # Uses the bootstrap key unless you set a per-relay key from the UI.
+      RELAY_API_KEY: ${LOCAL_RELAY_API_KEY:-${RELAY_API_KEY:-}}
+    depends_on:
+      - server

@@ -1,0 +1,43 @@
+#!ipxe
+# Embedded in the relay's iPXE binaries. Because iPXE runs this script
+# instead of using the boot filename from DHCP, a client that already ran
+# iPXE can never be handed iPXE again (no chainload loop).
+#
+# Locating the relay: its ProxyDHCP offer always carries the relay's address
+# as the server identifier (proxydhcp/dhcp-server). Some offers also set
+# next-server. The plain ${next-server} usually belongs to the site's real
+# DHCP server, so it is only a last resort (e.g. no ProxyDHCP at all).
+echo netdispatch :: iPXE ${version} (${platform}/${buildarch})
+:dhcp
+dhcp || goto dhcp_failed
+isset ${proxydhcp/dhcp-server} && set nd-tftp ${proxydhcp/dhcp-server} && goto have_relay || goto try_proxy_next
+:try_proxy_next
+isset ${proxydhcp/next-server} && set nd-tftp ${proxydhcp/next-server} && goto have_relay || goto try_next
+:try_next
+isset ${next-server} && set nd-tftp ${next-server} && goto have_relay || goto no_relay
+:have_relay
+echo netdispatch :: relay ${nd-tftp}, fetching boot script
+chain tftp://${nd-tftp}/netdispatch.ipxe || goto chain_done
+:chain_done
+# The hub set nd-local: fail on purpose so the firmware boots the next
+# entry (UEFI firmware only does that after a *failed* boot option).
+isset ${nd-local} && goto local || goto chain_failed
+
+:local
+echo netdispatch :: continuing with the next boot device
+exit 1
+
+:dhcp_failed
+echo netdispatch :: DHCP failed - retrying in 5 seconds (Ctrl-C for a shell)
+sleep 5 || shell
+goto dhcp
+
+:no_relay
+echo netdispatch :: no ProxyDHCP relay answered - retrying in 10 seconds (Ctrl-C for a shell)
+sleep 10 || shell
+goto dhcp
+
+:chain_failed
+echo netdispatch :: could not load netdispatch.ipxe from ${nd-tftp} - retrying in 10 seconds (Ctrl-C for a shell)
+sleep 10 || shell
+goto dhcp
