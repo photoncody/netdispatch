@@ -264,7 +264,7 @@ The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`
 
 Within 30 seconds the relay's card turns **online** and shows its IP, subnet and interface.
 
-The generated file builds the relay straight from GitHub by default. To use a prebuilt image instead, set `RELAY_IMAGE` on the hub. That avoids compiling iPXE on every relay host, which matters on a Raspberry Pi. Prebuilt images for amd64 and arm64 are published at `ghcr.io/photoncody/netdispatch-relay:latest` (and `-server`, `-samba`). Alternatively, build from a local checkout with `docker-compose.relay.yml` and the `RELAY_*` settings from `.env.example`.
+The generated file builds the relay straight from GitHub by default. To use a prebuilt image instead, set `RELAY_IMAGE` on the hub. That avoids compiling iPXE on every relay host, which matters on a Raspberry Pi. Prebuilt images for amd64 and arm64 are published at `ghcr.io/photoncody/netdispatch-relay:latest` (and `-server`, `-samba`). Pull requests also publish `:pr-<number>` builds for testing. Alternatively, build from a local checkout with `docker-compose.relay.yml` and the `RELAY_*` settings from `.env.example`.
 
 Relay options (environment variables in the compose file):
 

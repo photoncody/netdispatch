@@ -1,10 +1,12 @@
 name: Images
 
 # Builds the three images for linux/amd64 and linux/arm64 on native runners
-# (no QEMU emulation, so the jobs stay fast).
-#   pull_request    -> build only (verifies every Dockerfile on both architectures)
-#   main / v* tags  -> push per-arch digests, then publish multi-arch tags to GHCR:
-#                      ghcr.io/<owner>/netdispatch-{server,relay,samba}
+# (no QEMU emulation, so the jobs stay fast), then publishes multi-arch tags to
+# ghcr.io/<owner>/netdispatch-{server,relay,samba}:
+#   pull request (this repo) -> pr-<number>, sha-<short>   (deploy and test before merging)
+#   pull request (fork)      -> build only: forks get no token that can push packages
+#   main                     -> latest, main, sha-<short>
+#   v* tag                   -> X.Y.Z, X.Y, sha-<short>
 
 on:
   push:
@@ -22,7 +24,7 @@ permissions:
   packages: write
 
 env:
-  PUBLISH: ${{ github.event_name != 'pull_request' }}
+  PUBLISH: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
 jobs:
   build:
@@ -92,10 +94,10 @@ jobs:
           retention-days: 1
 
   publish:
-    # A single job with a fixed name: on pull requests it shows as
-    # "skipped" under a readable label instead of an unexpanded matrix name.
-    name: Publish to GHCR (main and tags only)
-    if: github.event_name != 'pull_request'
+    # One job with a fixed name (a skipped matrix job would show its
+    # unexpanded name). Skipped only for pull requests from forks.
+    name: Publish to GHCR
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -123,6 +125,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
+            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
@@ -131,6 +134,13 @@ jobs:
         run: |
           set -eu
           tags=$(jq -r '.tags[] | sub("^placeholder:"; "")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          {
+            echo "### Published images"
+            echo
+            echo "Tags: $(paste -sd' ' <<< "$tags")"
+            echo
+            echo '```bash'
+          } >> "$GITHUB_STEP_SUMMARY"
           for image in server relay samba; do
             name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netdispatch-${image}"
             args=""
@@ -141,4 +151,6 @@ jobs:
             docker buildx imagetools create $args
             docker buildx imagetools inspect "${name}:${{ steps.meta.outputs.version }}"
             echo "::endgroup::"
+            echo "docker pull ${name}:${{ steps.meta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

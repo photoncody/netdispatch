@@ -64,7 +64,17 @@ The server Dockerfile has three stages: `assets` (Tailwind CLI, Alpine.js, wimbo
   - pytest inside the Dockerfile's `test` stage, with the GHA layer cache, run with `-W error::DeprecationWarning`.
 - **`.github/workflows/images.yml`** builds `server`, `relay` and `samba` for amd64 and arm64.
   - Each architecture builds on **native** runners (`ubuntu-24.04` / `ubuntu-24.04-arm`). There's no QEMU emulation, so it stays fast.
-  - Pull requests only build. Pushes to `main` and `v*` tags push per-architecture digests, then the `publish` job merges them into multi-arch tags `ghcr.io/<owner>/netdispatch-<image>`. The tags are `latest` and `main` (on `main`), `X.Y.Z`/`X.Y` (on tags), and `sha-…`.
+  - Each build job pushes a per-architecture digest. The `Publish to GHCR` job then merges them into multi-arch tags on `ghcr.io/<owner>/netdispatch-<image>`:
+
+    | Trigger | Tags |
+    |---|---|
+    | Pull request from this repo | `pr-<number>`, `sha-…` |
+    | `main` | `latest`, `main`, `sha-…` |
+    | `v*` tag | `X.Y.Z`, `X.Y`, `sha-…` |
+
+    To test a PR on real hardware before merging, point a hub or relay at the `pr-<N>` tag. The run summary lists the pull commands.
+  - **Fork PRs only build.** They get no token that can push packages, so `Publish to GHCR` is skipped for them. A skip anywhere else is a bug.
+  - `pr-*` tags aren't cleaned up automatically. Prune old ones in the GitHub package settings if they pile up.
   - On arm64 runners the relay's iPXE builder runs as arm64 and **cross-compiles** the x86 boot binaries (`CROSS=x86_64-linux-gnu-`). Keep that branch of `relay/Dockerfile` working.
 - **The QEMU end-to-end test is deliberately not in CI.** It needs root, KVM, an ISO download and minutes of VM boot time. Run it by hand (below) for changes to the boot chain, relay or WinPE flow.
 
