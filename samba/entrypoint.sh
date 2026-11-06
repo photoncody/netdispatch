@@ -59,5 +59,5 @@ EOF
 printf '%s\n%s\n' "$SMB_PASSWORD" "$SMB_PASSWORD" | smbpasswd -s -a "$SMB_USERNAME" >/dev/null
 testparm -s >/dev/null 2>&1 || { testparm -s; exit 1; }
 
-echo "[netdispatch-samba] sharing ${SHARE_PATH} as \\\\<host>\\${SMB_SHARE} (user ${SMB_USERNAME}, read-only)"
+printf '[netdispatch-samba] sharing %s as \\\\<host>\\%s (user %s, read-only)\n' "$SHARE_PATH" "$SMB_SHARE" "$SMB_USERNAME"
 exec smbd --foreground --debug-stdout --no-process-group

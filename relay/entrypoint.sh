@@ -38,7 +38,7 @@ case "$CENTRAL_SERVER_URL" in
   *) die "CENTRAL_SERVER_URL must start with http:// or https://" ;;
 esac
 for f in "$UEFI_BOOTFILE" "$BIOS_BOOTFILE"; do
-  [ -f "/tftp/$f" ] || die "boot file /tftp/$f does not exist (available: $(ls /tftp | tr '\n' ' '))"
+  [ -f "/tftp/$f" ] || die "boot file /tftp/$f does not exist (available: $(cd /tftp && echo *))"
 done
 
 # --- interface & subnet ----------------------------------------------------

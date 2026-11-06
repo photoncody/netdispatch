@@ -57,6 +57,17 @@ docker compose --profile local-relay build
 
 The server Dockerfile has three stages: `assets` (Tailwind CLI, Alpine.js, wimboot, each SHA-pinned), `test`, and `runtime`. `runtime` is the last stage and therefore the default target. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
 
+### CI (GitHub Actions, target under 5 minutes per run)
+
+- **`.github/workflows/ci.yml`**
+  - `shellcheck` on every shell script, and `docker compose config` on both compose files.
+  - pytest inside the Dockerfile's `test` stage, with the GHA layer cache, run with `-W error::DeprecationWarning`.
+- **`.github/workflows/images.yml`** builds `server`, `relay` and `samba` for amd64 and arm64.
+  - Each architecture builds on **native** runners (`ubuntu-24.04` / `ubuntu-24.04-arm`). There's no QEMU emulation, so it stays fast.
+  - Pull requests only build. Pushes to `main` and `v*` tags push per-architecture digests, then the `publish` job merges them into multi-arch tags `ghcr.io/<owner>/netdispatch-<image>`. The tags are `latest` and `main` (on `main`), `X.Y.Z`/`X.Y` (on tags), and `sha-…`.
+  - On arm64 runners the relay's iPXE builder runs as arm64 and **cross-compiles** the x86 boot binaries (`CROSS=x86_64-linux-gnu-`). Keep that branch of `relay/Dockerfile` working.
+- **The QEMU end-to-end test is deliberately not in CI.** It needs root, KVM, an ISO download and minutes of VM boot time. Run it by hand (below) for changes to the boot chain, relay or WinPE flow.
+
 ### End-to-end test (Linux host, root, KVM recommended)
 
 You need these packages: `qemu-system-x86 ovmf dnsmasq-base`.
