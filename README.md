@@ -54,7 +54,7 @@ sequenceDiagram
    - With `IPXE_CLIENTS=direct`, those clients are recognised by DHCP user class and fetch `netdispatch.ipxe` directly instead.
 3. **Hold loop.** `netdispatch.ipxe` chains to `CENTRAL_SERVER_URL/boot`. An unknown MAC is recorded as **Waiting**, and the hub returns a banner (MAC, IP, relay, firmware) that sleeps and re-polls with `chain --replace`, so the loop never nests and can run for days.
 4. **Dispatch.** On the next poll after an admin clicks **Deploy now**, the hub serves the payload script and marks the device **Booting payload**.
-5. **One-shot.** The next time the device PXE-boots (for example, Windows Setup rebooting), the hub returns `exit`. The firmware falls through to the local disk. Alternatively, per deployment, the device goes back to the hold loop. A payload is never served twice by accident.
+5. **One-shot.** The next time the device PXE-boots (for example, Windows Setup rebooting), the hub tells iPXE to boot locally. iPXE then exits with a failure status, because UEFI firmware only moves on to the next boot entry after a *failed* boot option. The firmware falls through to the local disk. Alternatively, per deployment, the device goes back to the hold loop. A payload is never served twice by accident.
 
 Device states: `Waiting` → `Deploying` (dispatched, not yet picked up) → `Booting payload` → `Local boot`. A device that stops polling for `DEVICE_OFFLINE_SECONDS` shows as `Offline`. **Reset to hold loop** and **Boot local** are always available.
 
@@ -179,6 +179,17 @@ WinPE can be booted over HTTP, but Windows Setup then needs the full installatio
 | `{{ image }}` | dispatched image name |
 
 Templates are validated on save: they must render to well-formed XML.
+
+A complete starting point is in [examples/unattend/win11-uefi-basic.xml](examples/unattend/win11-uefi-basic.xml). Paste it into **Unattend → New template**, or copy it to `data/configs/`. It does the following:
+- wipes disk 0 and creates the standard UEFI layout
+- installs image index 1
+- bypasses the TPM, Secure Boot and RAM checks
+- creates a local admin
+- skips OOBE
+
+Change its password before using it.
+
+**WinPE drivers.** WinPE needs inbox drivers for the client's NIC and disk controller. Physical Intel/Realtek NICs, NVMe and AHCI work out of the box. On VMs, use e1000e (or inject the VirtIO drivers into `boot.wim`). With a virtio-net NIC, WinPE can't map the share. With virtio-blk, Setup won't see the disk.
 
 Firewall: clients that install Windows need TCP 445 to the hub, besides HTTP(S). Set `SMB_HOST` if WinPE should reach Samba at a different address than `BOOT_BASE_URL`'s host.
 
@@ -317,6 +328,7 @@ Layout:
 | `server/app/templates/` | dashboard (Tailwind + Alpine.js, compiled at image build, no CDN at runtime) |
 | `relay/` | dnsmasq entrypoint, heartbeat, iPXE build (pinned `v2.0.0`, embedded script) |
 | `samba/` | SMB sidecar |
+| `examples/unattend/` | sample autounattend.xml templates |
 
 ## Limitations (v1)
 

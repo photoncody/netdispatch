@@ -17,8 +17,15 @@ isset ${proxydhcp/next-server} && set nd-tftp ${proxydhcp/next-server} && goto h
 isset ${next-server} && set nd-tftp ${next-server} && goto have_relay || goto no_relay
 :have_relay
 echo netdispatch :: relay ${nd-tftp}, fetching boot script
-chain tftp://${nd-tftp}/netdispatch.ipxe || goto chain_failed
-exit 0
+chain tftp://${nd-tftp}/netdispatch.ipxe || goto chain_done
+:chain_done
+# The hub set nd-local: fail on purpose so the firmware boots the next
+# entry (UEFI firmware only does that after a *failed* boot option).
+isset ${nd-local} && goto local || goto chain_failed
+
+:local
+echo netdispatch :: continuing with the next boot device
+exit 1
 
 :dhcp_failed
 echo netdispatch :: DHCP failed - retrying in 5 seconds (Ctrl-C for a shell)

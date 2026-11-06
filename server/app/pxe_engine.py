@@ -178,11 +178,18 @@ def render_wait(ctx: BootContext, seq: int = 0) -> str:
 
 
 def render_local(ctx: BootContext, reason: str = "no deployment pending") -> str:
-    """Exit iPXE so the firmware continues with the next boot device."""
+    """Hand the machine back to the firmware's next boot entry (the disk).
+
+    UEFI firmware only tries the next boot option when the current one
+    *fails*; a successful return drops into the setup menu. So we set the
+    global iPXE setting ``nd-local`` and return; the relay script and the
+    embedded script see it and exit with status 1 all the way out.
+    """
     return "\n".join(
         _header(ctx, "local")
         + [
             f"echo netdispatch: {ipxe_text(reason)} for {ipxe_text(ctx.mac)} - booting from local disk",
+            "set nd-local 1",
             "sleep 2",
             "exit 0",
             "",

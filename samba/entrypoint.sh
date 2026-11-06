@@ -52,6 +52,8 @@ cat > /etc/samba/smb.conf <<EOF
    guest ok = no
    valid users = ${SMB_USERNAME}
    force user = ${SMB_USERNAME}
+   # Extracted files are 0644; let WinPE execute setup.exe & co. anyway.
+   acl allow execute always = yes
 EOF
 
 printf '%s\n%s\n' "$SMB_PASSWORD" "$SMB_PASSWORD" | smbpasswd -s -a "$SMB_USERNAME" >/dev/null

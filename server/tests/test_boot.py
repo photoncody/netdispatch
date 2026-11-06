@@ -88,7 +88,7 @@ def test_full_deploy_cycle_windows(client, admin, windows_iso):
 
     # Setup reboots -> PXE again -> must NOT reinstall; falls through to local disk
     s = client.get(Q).text
-    assert "exit 0" in s and "deployment complete" in s
+    assert "set nd-local 1" in s and "exit 0" in s and "deployment complete" in s
     assert _device(admin)["state"] == "local"
     # token is revoked once the deployment is over
     assert client.get(f"/files/d/{token}/autounattend.xml").status_code == 404
