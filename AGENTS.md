@@ -51,9 +51,11 @@ docker build --target test -t netdispatch-test server/ && docker run --rm netdis
 # Strict mode: fail on deprecation warnings too (used during development)
 docker run --rm netdispatch-test python -m pytest -q -W error::DeprecationWarning tests
 
-# Build everything (needs buildx >= 0.17; distro packages are often older)
-docker compose --profile local-relay build
+# Build everything from this checkout (needs buildx >= 0.17; distro packages are often older)
+docker compose -f docker-compose.yml -f docker-compose.build.yml --profile local-relay build
 ```
+
+`docker-compose.yml` and `docker-compose.relay.yml` are the user-facing files: they run the published `ghcr.io/photoncody/netdispatch-*:latest` images and hold every setting inline, so users download just the file without cloning. `docker-compose.build.yml` is the development override that swaps in local builds tagged `netdispatch-<name>:local`. Don't add `build:` back to the user-facing files: it breaks them for anyone without a checkout.
 
 The server Dockerfile has three stages: `assets` (Tailwind CLI, Alpine.js, wimboot, each SHA-pinned), `test`, and `runtime`. `runtime` is the last stage and therefore the default target. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
 
@@ -86,7 +88,7 @@ You need these packages: `qemu-system-x86 ovmf dnsmasq-base`.
    ```bash
    # In docker-compose.yml set BOOT_BASE_URL: http://10.77.0.1:8000, SMB_HOST: 10.77.0.1,
    # SMB_PASSWORD (x-smb block) and FALLBACK_ADMIN_PASSWORD. Don't commit those edits.
-   docker compose up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
    sudo tests/e2e/net-up.sh
    ```
 2. Create a relay with `POST /api/relays` (or in the UI), then run it on the test bridge:

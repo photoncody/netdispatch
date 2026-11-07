@@ -1,13 +1,19 @@
 # netdispatch central server (hub)
 #
-# All settings live in this file. Edit the values below, then:
-#   docker compose up -d --build
+# This file is all you need: it runs the prebuilt images (amd64 + arm64) and
+# holds every setting. Save it in a folder of its own, edit the values below,
+# then:
+#   docker compose up -d
 #
 # Optional: also run a relay on this host (for the hub's own subnet). Fill in
 # the relay service at the bottom first, then:
-#   docker compose --profile local-relay up -d --build
+#   docker compose --profile local-relay up -d
 #
 # After changing a setting, apply it with: docker compose up -d
+# Upgrade:  docker compose pull && docker compose up -d
+#
+# Developing netdispatch? Build from a checkout of the repo instead with
+# docker-compose.build.yml (see AGENTS.md).
 name: netdispatch
 
 # Windows install share credentials. The server embeds them in the WinPE
@@ -22,10 +28,7 @@ x-smb: &smb
 
 services:
   server:
-    build:
-      context: ./server
-      target: runtime
-    image: netdispatch-server:local
+    image: ghcr.io/photoncody/netdispatch-server:latest
     restart: unless-stopped
     environment:
       <<: *smb
@@ -68,9 +71,10 @@ services:
       # Optional bootstrap key: relays presenting it register themselves.
       # Per-relay keys from Relays -> Add relay are safer.
       RELAY_API_KEY: ""
-      # Generated relay compose files build from this source, or use this
-      # prebuilt image when set (e.g. ghcr.io/photoncody/netdispatch-relay:latest).
-      RELAY_IMAGE: ""
+      # Image the relay compose files from Relays -> Add relay run. Empty =
+      # build the relay from GitHub on each relay host instead (slow: it
+      # compiles iPXE).
+      RELAY_IMAGE: ghcr.io/photoncody/netdispatch-relay:latest
 
       # --- Boot behaviour ----------------------------------------------------
       # Never-seen machines: "waiting" (hold screen) or "local" (boot the local
@@ -94,8 +98,7 @@ services:
       - ./data:/data
 
   samba:
-    build: ./samba
-    image: netdispatch-samba:local
+    image: ghcr.io/photoncody/netdispatch-samba:latest
     restart: unless-stopped
     environment:
       <<: *smb
@@ -110,8 +113,7 @@ services:
 
   relay:
     profiles: ["local-relay"]
-    build: ./relay
-    image: netdispatch-relay:local
+    image: ghcr.io/photoncody/netdispatch-relay:latest
     restart: unless-stopped
     network_mode: host
     cap_add: [NET_ADMIN]

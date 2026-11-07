@@ -28,6 +28,7 @@ jobs:
         run: |
           docker compose -f docker-compose.yml --profile local-relay config --quiet
           docker compose -f docker-compose.relay.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.build.yml --profile local-relay config --quiet
 
   test:
     name: Server tests (pytest)
