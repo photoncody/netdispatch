@@ -263,7 +263,7 @@ The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`
 
 Within 30 seconds the relay's card turns **online** and shows its IP, subnet and interface.
 
-The generated file builds the relay straight from GitHub by default. To use a prebuilt image instead, set `RELAY_IMAGE` on the hub. That avoids compiling iPXE on every relay host, which matters on a Raspberry Pi. Prebuilt images for amd64 and arm64 are published at `ghcr.io/photoncody/netdispatch-relay:latest` (and `-server`, `-samba`). Pull requests also publish `:pr-<number>` builds for testing. Alternatively, build from a local checkout: edit the values in `docker-compose.relay.yml`, then run `docker compose -f docker-compose.relay.yml up -d --build`.
+The generated file builds the relay straight from GitHub by default. To use a prebuilt image instead, set `RELAY_IMAGE` on the hub. That avoids compiling iPXE on every relay host, which matters on a Raspberry Pi. Prebuilt images for amd64 and arm64 are published at `ghcr.io/photoncody/netdispatch-relay:latest` (and `-server`, `-samba`). Pull requests also publish `:pr-<number>` builds for testing. If you'd rather write the file by hand, [docker-compose.relay.yml](docker-compose.relay.yml) does the same with the prebuilt image, so it works without the repo. Copy it to the relay host as `docker-compose.yml`, fill in the values, and run `docker compose up -d`. Comments in the file show how to build from a local checkout instead.
 
 Relay options (environment variables in the compose file):
 
@@ -410,7 +410,7 @@ docker compose up -d --build
 ```
 If `git stash pop` reports a conflict, keep your values and take any new settings from the updated file.
 
-**Upgrading from a version that used `.env`:** the compose files no longer read `.env`. Copy your values into `docker-compose.yml` (and `docker-compose.relay.yml` for a relay built from a checkout) before you run `docker compose up -d`, or the hub starts with default settings. Then delete `.env`.
+**Upgrading from a version that used `.env`:** the compose files no longer read `.env`. Copy your values into `docker-compose.yml` (and into the relay's compose file on each relay host that used `.env`) before you run `docker compose up -d`, or the hub starts with default settings. Then delete `.env`.
 
 Upgrade relays the same way on each relay host (`docker compose up -d --build`).
 

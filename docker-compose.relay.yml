@@ -6,17 +6,24 @@
 #   * nothing else on that host answering DHCP (port 67) or TFTP (port 69)
 #   * the hub reachable from the host AND from PXE clients at CENTRAL_SERVER_URL
 #
-# Create the relay in the hub UI (Relays -> Add relay) to get RELAY_ID and a
-# per-relay RELAY_API_KEY. The UI also hands you a ready-made compose file;
-# this one builds from a local checkout instead. Edit the values below, then:
+# Easiest: create the relay in the hub UI (Relays -> Add relay). It gives you
+# a ready-made compose file with RELAY_ID and a per-relay RELAY_API_KEY
+# already filled in.
 #
-#   docker compose -f docker-compose.relay.yml up -d --build
+# This file is the same thing written by hand. It runs the prebuilt image
+# (amd64 + arm64), so it works on its own: copy it to the relay host as
+# docker-compose.yml, edit the values below, then:
+#
+#   docker compose up -d
 name: netdispatch-relay
 
 services:
   relay:
-    build: ./relay
-    image: netdispatch-relay:local
+    image: ghcr.io/photoncody/netdispatch-relay:latest
+    # To build from a local checkout of this repo instead, swap the image line
+    # above for these two, then run: docker compose up -d --build
+    # build: ./relay
+    # image: netdispatch-relay:local
     container_name: netdispatch-relay
     restart: unless-stopped
     network_mode: host
