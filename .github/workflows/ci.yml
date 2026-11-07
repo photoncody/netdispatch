@@ -27,8 +27,7 @@ jobs:
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml --profile local-relay config --quiet
-          CENTRAL_SERVER_URL=http://hub.invalid RELAY_ID=ci RELAY_API_KEY=ci \
-            docker compose -f docker-compose.relay.yml config --quiet
+          docker compose -f docker-compose.relay.yml config --quiet
 
   test:
     name: Server tests (pytest)

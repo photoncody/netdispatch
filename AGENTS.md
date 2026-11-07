@@ -84,7 +84,8 @@ You need these packages: `qemu-system-x86 ovmf dnsmasq-base`.
 
 1. Bring up the stack and the test LAN:
    ```bash
-   # .env: BOOT_BASE_URL=http://10.77.0.1:8000  SMB_HOST=10.77.0.1  SMB_PASSWORD=…  FALLBACK_ADMIN_PASSWORD=…
+   # In docker-compose.yml set BOOT_BASE_URL: http://10.77.0.1:8000, SMB_HOST: 10.77.0.1,
+   # SMB_PASSWORD (x-smb block) and FALLBACK_ADMIN_PASSWORD. Don't commit those edits.
    docker compose up -d --build
    sudo tests/e2e/net-up.sh
    ```
@@ -200,7 +201,7 @@ Verified with this harness:
 ## Conventions
 
 - **Python 3.12 and SQLAlchemy 2 typed models.** Times are naive UTC (`models.utcnow()`) and serialised with a trailing `Z` (`models.iso()`).
-- **New config is an env var on `Settings`.** Document it in `.env.example`, and in README.md if users need it.
+- **New config is an env var on `Settings`.** Add it to the server's `environment:` in `docker-compose.yml` with a comment (commented out with its default if it's rarely changed), and to README.md if users need it. There is no `.env` file: settings live in the compose files.
 - **Pin new dependencies** in `server/requirements*.txt`. Downloaded build assets get a version and a SHA-256 in the Dockerfile.
 - **Keep user-visible docs in README.md** and internals here. Update both when behaviour changes. `CLAUDE.md` and `CHATGPT.md` point at this file, so don't copy content into them.
 - **Never commit `.env`, `data/`, or `relay/certs/*.pem|*.crt`** (they're git-ignored).

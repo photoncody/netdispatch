@@ -48,6 +48,7 @@ def compose_snippet(settings: Settings, relay_id: str, name: str, key: str | Non
         "      # SUBNET_RANGE: 192.168.20.0,proxy   # default: derived from RELAY_INTERFACE\n"
         "      # UEFI_BOOTFILE: snponly.efi         # use firmware NIC drivers on UEFI\n"
         "      # IPXE_CLIENTS: direct               # let NIC-ROM iPXE skip the netdispatch iPXE build\n"
+        '      # RELAY_LOG_DHCP: "false"            # quiet the logs once everything works\n'
     )
 
 
