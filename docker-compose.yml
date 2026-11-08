@@ -1,60 +1,131 @@
 # netdispatch central server (hub)
 #
-#   cp .env.example .env    # then edit PUBLIC_URL, SMB_PASSWORD, auth settings
-#   docker compose up -d --build
+# This file is all you need: it runs the prebuilt images (amd64 + arm64) and
+# holds every setting. Save it in a folder of its own, edit the values below,
+# then:
+#   docker compose up -d
 #
-# Optional: also run a relay on this host (for the hub's own subnet):
-#   docker compose --profile local-relay up -d --build
+# Optional: also run a relay on this host (for the hub's own subnet). Fill in
+# the relay service at the bottom first, then:
+#   docker compose --profile local-relay up -d
+#
+# After changing a setting, apply it with: docker compose up -d
+# Upgrade:  docker compose pull && docker compose up -d
+#
+# Developing netdispatch? Build from a checkout of the repo instead with
+# docker-compose.build.yml (see AGENTS.md).
 name: netdispatch
+
+# Windows install share credentials. The server embeds them in the WinPE
+# script and the samba container serves the share with them, so both services
+# share this one block.
+x-smb: &smb
+  SMB_SHARE: netdispatch
+  SMB_USERNAME: netdispatch        # letters, digits, . _ - only
+  # Required for Windows installs: set a long random string (no double quotes).
+  # While it's empty the share stays off.
+  SMB_PASSWORD: ""
 
 services:
   server:
-    build:
-      context: ./server
-      target: runtime
-    image: netdispatch-server:local
+    image: ghcr.io/photoncody/netdispatch-server:latest
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
     environment:
+      <<: *smb
       DATA_DIR: /data
+
+      # --- Addresses ---------------------------------------------------------
+      # The address you open the dashboard at (your reverse proxy's address).
+      # Used for OIDC redirect URIs and as the default boot URL.
+      PUBLIC_URL: https://pxe.example.com
+      # The address booting machines use to reach the hub. Empty = PUBLIC_URL.
+      # Use a plain-HTTP LAN address when iPXE doesn't trust the proxy's
+      # certificate, or to keep multi-GB transfers off TLS. Relays should use
+      # the same value for CENTRAL_SERVER_URL.
+      BOOT_BASE_URL: ""
+      # Reverse proxies allowed to set X-Forwarded-For / -Proto
+      # (comma-separated IPs/CIDRs, or * to trust any).
+      FORWARDED_ALLOW_IPS: 127.0.0.1
+      # Host/IP WinPE uses to reach the samba container.
+      # Empty = the host of BOOT_BASE_URL (or PUBLIC_URL).
+      SMB_HOST: ""
+
+      # --- Local admin -------------------------------------------------------
+      FALLBACK_ADMIN_ENABLED: "true"
+      FALLBACK_ADMIN_USERNAME: admin
+      # Empty: a random password is generated on first start, logged once and
+      # saved in data/initial_admin_password.
+      FALLBACK_ADMIN_PASSWORD: ""
+
+      # --- Single sign-on (OIDC) ---------------------------------------------
+      OIDC_ENABLED: "false"
+      OIDC_CLIENT_ID: ""
+      OIDC_CLIENT_SECRET: ""
+      # e.g. https://auth.example.com/application/o/netdispatch/.well-known/openid-configuration
+      OIDC_METADATA_URL: ""
+      OIDC_PROVIDER_NAME: SSO          # label on the sign-in button
+      OIDC_ALLOWED_GROUPS: ""          # comma-separated; empty = anyone the IdP authenticates
+      AUTO_REDIRECT_SSO: "false"       # skip the sign-in page; /login?local=true still works
+
+      # --- Relays ------------------------------------------------------------
+      # Optional bootstrap key: relays presenting it register themselves.
+      # Per-relay keys from Relays -> Add relay are safer.
+      RELAY_API_KEY: ""
+      # Image the relay compose files from Relays -> Add relay run. Empty =
+      # build the relay from GitHub on each relay host instead (slow: it
+      # compiles iPXE).
+      RELAY_IMAGE: ghcr.io/photoncody/netdispatch-relay:latest
+
+      # --- Boot behaviour ----------------------------------------------------
+      # Never-seen machines: "waiting" (hold screen) or "local" (boot the local
+      # disk until an admin dispatches something).
+      NEW_DEVICE_STATE: waiting
+
+      # --- Rarely changed (defaults shown) -----------------------------------
+      # SECRET_KEY: ""                 # empty = generated into data/secret_key
+      # SESSION_MAX_AGE: "43200"       # seconds
+      # OIDC_SCOPES: openid email profile
+      # OIDC_GROUPS_CLAIM: groups
+      # LOGIN_MAX_ATTEMPTS: "10"       # failed sign-ins per IP per window
+      # LOGIN_WINDOW_SECONDS: "300"
+      # RELAY_OFFLINE_SECONDS: "90"
+      # RELAY_BUILD_CONTEXT: https://github.com/photoncody/netdispatch.git#main:relay
+      # WAIT_POLL_SECONDS: "5"
+      # DEVICE_OFFLINE_SECONDS: "60"
     ports:
-      - "${HUB_HTTP_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
-      - ${DATA_PATH:-./data}:/data
+      - ./data:/data
 
   samba:
-    build: ./samba
-    image: netdispatch-samba:local
+    image: ghcr.io/photoncody/netdispatch-samba:latest
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
+    environment:
+      <<: *smb
     ports:
       # WinPE's SMB client only talks to port 445; it must be reachable from
       # every client subnet that installs Windows.
-      - "${SMB_BIND:-0.0.0.0}:445:445"
+      - "445:445"
     volumes:
-      - ${DATA_PATH:-./data}/extracted:/data/extracted:ro
+      - ./data/extracted:/data/extracted:ro
     depends_on:
       - server
 
   relay:
     profiles: ["local-relay"]
-    build: ./relay
-    image: netdispatch-relay:local
+    image: ghcr.io/photoncody/netdispatch-relay:latest
     restart: unless-stopped
     network_mode: host
     cap_add: [NET_ADMIN]
-    env_file:
-      - path: .env
-        required: false
     environment:
-      CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:-http://127.0.0.1:8000}
-      RELAY_ID: ${RELAY_ID:-hub-local}
-      RELAY_NAME: ${RELAY_NAME:-Hub local subnet}
-      # Uses the bootstrap key unless you set a per-relay key from the UI.
-      RELAY_API_KEY: ${LOCAL_RELAY_API_KEY:-${RELAY_API_KEY:-}}
+      CENTRAL_SERVER_URL: http://127.0.0.1:8000
+      RELAY_ID: hub-local
+      RELAY_NAME: Hub local subnet
+      # A per-relay key from Relays -> Add relay, or the server's bootstrap
+      # RELAY_API_KEY above.
+      RELAY_API_KEY: ""
+      # Relay options (see docker-compose.relay.yml for all of them):
+      # RELAY_INTERFACE: eth0
+      # SUBNET_RANGE: 192.168.20.0,proxy
     depends_on:
       - server

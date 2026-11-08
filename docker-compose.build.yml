@@ -1,0 +1,21 @@
+# Development override: build the hub images from this checkout instead of
+# pulling the published ones. Use it together with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml --profile local-relay build
+#
+# Images are tagged netdispatch-<name>:local.
+services:
+  server:
+    build:
+      context: ./server
+      target: runtime
+    image: netdispatch-server:local
+
+  samba:
+    build: ./samba
+    image: netdispatch-samba:local
+
+  relay:
+    build: ./relay
+    image: netdispatch-relay:local

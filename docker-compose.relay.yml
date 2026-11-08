@@ -6,29 +6,50 @@
 #   * nothing else on that host answering DHCP (port 67) or TFTP (port 69)
 #   * the hub reachable from the host AND from PXE clients at CENTRAL_SERVER_URL
 #
-# Create the relay in the hub UI (Relays -> Add relay) to get RELAY_ID and a
-# per-relay RELAY_API_KEY, then:
+# Easiest: create the relay in the hub UI (Relays -> Add relay). It gives you
+# a ready-made compose file with RELAY_ID and a per-relay RELAY_API_KEY
+# already filled in.
 #
-#   cp .env.example .env    # set the RELAY_* variables
-#   docker compose -f docker-compose.relay.yml up -d --build
+# This file is the same thing written by hand. It runs the prebuilt image
+# (amd64 + arm64), so it works on its own: copy it to the relay host as
+# docker-compose.yml, edit the values below, then:
+#
+#   docker compose up -d
 name: netdispatch-relay
 
 services:
   relay:
-    build: ./relay
-    image: netdispatch-relay:local
+    image: ghcr.io/photoncody/netdispatch-relay:latest
+    # To build from a local checkout of this repo instead, swap the image line
+    # above for these two, then run: docker compose up -d --build
+    # build: ./relay
+    # image: netdispatch-relay:local
     container_name: netdispatch-relay
     restart: unless-stopped
     network_mode: host
     cap_add: [NET_ADMIN]
     environment:
-      CENTRAL_SERVER_URL: ${CENTRAL_SERVER_URL:?set CENTRAL_SERVER_URL}
-      RELAY_ID: ${RELAY_ID:?set RELAY_ID}
-      RELAY_NAME: ${RELAY_NAME:-}
-      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY}
-      RELAY_INTERFACE: ${RELAY_INTERFACE:-}
-      SUBNET_RANGE: ${SUBNET_RANGE:-}
-      UEFI_BOOTFILE: ${UEFI_BOOTFILE:-ipxe.efi}
-      IPXE_CLIENTS: ${IPXE_CLIENTS:-chainload}
-      RELAY_LOG_DHCP: ${RELAY_LOG_DHCP:-true}
-      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-30}
+      # Hub URL used by iPXE clients AND the heartbeat (normally the hub's
+      # BOOT_BASE_URL).
+      CENTRAL_SERVER_URL: http://10.0.0.5:8000
+      # Unique ID: lowercase letters, digits, . _ -
+      RELAY_ID: site-office-vlan20
+      RELAY_NAME: Office VLAN 20
+      # Per-relay key from the hub UI (or the hub's bootstrap RELAY_API_KEY).
+      RELAY_API_KEY: "paste-the-relay-key-here"
+
+      # --- Options (defaults shown) ------------------------------------------
+      # Interface on the PXE subnet. Default: interface of the default route.
+      # RELAY_INTERFACE: eth0
+      # dnsmasq ProxyDHCP range. Default: derived from RELAY_INTERFACE.
+      # SUBNET_RANGE: 192.168.20.0,proxy
+      # UEFI boot file: ipxe.efi (iPXE NIC drivers) or snponly.efi (firmware
+      # NIC driver, more compatible with some NICs).
+      # UEFI_BOOTFILE: ipxe.efi
+      # Clients whose firmware/NIC ROM already runs iPXE (e.g. Proxmox/QEMU VMs):
+      #   chainload - give them netdispatch's iPXE build too (HTTPS + your CA)
+      #   direct    - let them fetch the boot script directly (one TFTP transfer less)
+      # IPXE_CLIENTS: chainload
+      # Log every DHCP exchange (useful while setting up).
+      # RELAY_LOG_DHCP: "true"
+      # HEARTBEAT_INTERVAL: "30"

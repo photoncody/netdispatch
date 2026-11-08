@@ -83,7 +83,7 @@ A dispatch is **one-shot**. When an installer reboots the machine and it network
 ## Requirements
 
 **Hub host**
-- A Linux server or VM with Docker Engine and Docker Compose v2.24 or newer (`docker compose version`). Building also needs buildx 0.17 or newer (`docker buildx version`).
+- A Linux server or VM with Docker Engine and Docker Compose v2 (`docker compose version`). Building the images yourself also needs buildx 0.17 or newer (`docker buildx version`).
 - Disk space for your images. Every ISO is kept *and* extracted, so plan for about twice its size. A Windows ISO needs about 16 GB.
 
 **Relay hosts** (one per network segment)
@@ -105,27 +105,29 @@ Your existing DHCP server must **not** hand out PXE boot options of its own (opt
 
 ## Install the hub
 
-1. **Get the code and create your settings file.**
-   ```bash
-   git clone https://github.com/photoncody/netdispatch.git
-   cd netdispatch
-   cp .env.example .env
-   ```
+The hub runs from prebuilt images (amd64 and arm64), so you don't need to clone the repo. Download the files you need from it. For the hub, that's just `docker-compose.yml`.
 
-2. **Edit `.env`.** These are the settings almost everyone changes:
+1. **Get the compose file.**
+   ```bash
+   mkdir netdispatch && cd netdispatch
+   curl -fsSLO https://raw.githubusercontent.com/photoncody/netdispatch/main/docker-compose.yml
+   ```
+   Grab anything else you want from the repo the same way, for example the sample unattend template in [examples/unattend/](examples/unattend/).
+
+2. **Edit `docker-compose.yml`.** Every setting is written out in the file with a comment; there's no separate `.env` file. These are the ones almost everyone changes:
 
    | Setting | Example | What it's for |
    |---|---|---|
    | `PUBLIC_URL` | `https://pxe.example.com` | The address you open the dashboard at |
    | `BOOT_BASE_URL` | `http://10.0.0.5:8000` | The address *booting machines* use to reach the hub. See [below](#which-boot-url). |
-   | `SMB_PASSWORD` | a long random string | Required for Windows installs. No double quotes. |
+   | `SMB_PASSWORD` | a long random string | Required for Windows installs. No double quotes. It sits in the `x-smb` block at the top, which both the server and the samba container read. |
    | `FALLBACK_ADMIN_PASSWORD` | a long random string | Local admin password. Leave empty to have one generated. |
 
 3. **Start it.**
    ```bash
-   docker compose up -d --build
+   docker compose up -d
    ```
-   The first build takes a few minutes.
+   Docker downloads the images the first time.
 
 4. **Sign in.** Open `PUBLIC_URL` (or `http://<hub-ip>:8000`) and sign in as `admin`. If you left `FALLBACK_ADMIN_PASSWORD` empty, read the generated password from the log:
    ```bash
@@ -133,7 +135,7 @@ Your existing DHCP server must **not** hand out PXE boot options of its own (opt
    ```
    The password is also saved in `data/initial_admin_password`.
 
-Everything netdispatch stores lives in `./data` (change it with `DATA_PATH`):
+Everything netdispatch stores lives in `./data` (to move it, change the `./data` volume paths in `docker-compose.yml`):
 
 | Path | Contents |
 |---|---|
@@ -221,15 +223,15 @@ Works with any OpenID Connect provider: Authentik, Keycloak, Microsoft Entra ID,
 1. In your identity provider, create an OIDC application:
    - type: confidential, authorization-code flow
    - redirect URI: `https://pxe.example.com/auth/oidc/callback`, which is your `PUBLIC_URL` + `/auth/oidc/callback`
-2. Add the values to `.env`:
-   ```env
-   OIDC_ENABLED=true
-   OIDC_CLIENT_ID=netdispatch
-   OIDC_CLIENT_SECRET=...
-   OIDC_METADATA_URL=https://auth.example.com/application/o/netdispatch/.well-known/openid-configuration
-   OIDC_PROVIDER_NAME=Authentik            # label on the sign-in button
-   OIDC_ALLOWED_GROUPS=pxe-admins          # optional: restrict to these groups
-   AUTO_REDIRECT_SSO=true                  # optional: skip the sign-in page entirely
+2. Fill in the OIDC values under the server's `environment:` in `docker-compose.yml`:
+   ```yaml
+   OIDC_ENABLED: "true"
+   OIDC_CLIENT_ID: netdispatch
+   OIDC_CLIENT_SECRET: "..."
+   OIDC_METADATA_URL: https://auth.example.com/application/o/netdispatch/.well-known/openid-configuration
+   OIDC_PROVIDER_NAME: Authentik        # label on the sign-in button
+   OIDC_ALLOWED_GROUPS: pxe-admins      # optional: restrict to these groups
+   AUTO_REDIRECT_SSO: "true"            # optional: skip the sign-in page entirely
    ```
 3. Apply it: `docker compose up -d`.
 
@@ -259,12 +261,17 @@ The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`
 4. Copy the generated **docker-compose.yml**.
 5. On a Linux host attached to that network segment, save the file and start the relay:
    ```bash
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 Within 30 seconds the relay's card turns **online** and shows its IP, subnet and interface.
 
-The generated file builds the relay straight from GitHub by default. To use a prebuilt image instead, set `RELAY_IMAGE` on the hub. That avoids compiling iPXE on every relay host, which matters on a Raspberry Pi. Prebuilt images for amd64 and arm64 are published at `ghcr.io/photoncody/netdispatch-relay:latest` (and `-server`, `-samba`). Pull requests also publish `:pr-<number>` builds for testing. Alternatively, build from a local checkout with `docker-compose.relay.yml` and the `RELAY_*` settings from `.env.example`.
+The generated file runs the prebuilt relay image, `ghcr.io/photoncody/netdispatch-relay:latest` (amd64 and arm64), set by `RELAY_IMAGE` on the hub. Clear `RELAY_IMAGE` to have relays build from GitHub instead. That compiles iPXE on every relay host, which is slow on a Raspberry Pi. Pull requests also publish `:pr-<number>` images for testing.
+
+If you'd rather write the file by hand, download [docker-compose.relay.yml](docker-compose.relay.yml) to the relay host as `docker-compose.yml`, fill in the values and run `docker compose up -d`:
+```bash
+curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/photoncody/netdispatch/main/docker-compose.relay.yml
+```
 
 Relay options (environment variables in the compose file):
 
@@ -278,7 +285,7 @@ Relay options (environment variables in the compose file):
 
 **Several VLANs on one host:** run one relay container per VLAN interface. Give each its own `RELAY_ID`, key and `RELAY_INTERFACE`.
 
-**A relay on the hub host itself:** add `LOCAL_RELAY_API_KEY` (or a bootstrap `RELAY_API_KEY`) to `.env`, then run:
+**A relay on the hub host itself:** set `RELAY_API_KEY` on the `relay` service at the bottom of `docker-compose.yml`. Use a per-relay key, or the same value as the server's bootstrap `RELAY_API_KEY`. Then run:
 ```bash
 docker compose --profile local-relay up -d
 ```
@@ -333,7 +340,7 @@ How a Windows install runs:
 4. When Setup reboots, the machine is sent to its local disk and the install continues there.
 
 **Prerequisites:**
-- `SMB_PASSWORD` is set in `.env`.
+- `SMB_PASSWORD` is set in the `x-smb` block of `docker-compose.yml`.
 - Machines can reach the hub on TCP 445. If they must use a different address than the boot URL's host, set `SMB_HOST`.
 
 ### Unattend templates
@@ -401,11 +408,19 @@ Other actions in the same dialog:
 ## Operations: upgrades, backups, logs
 
 **Upgrade the hub**
+
 ```bash
-git pull
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
-Upgrade relays the same way on each relay host (`docker compose up -d --build`).
+Upgrade relays the same way on each relay host. A relay that builds from GitHub (`build:` in its compose file) upgrades with `docker compose up -d --build` instead.
+
+New settings sometimes appear in the published [docker-compose.yml](docker-compose.yml). Your copy keeps working without them, since every setting has a default. Compare with the published file when you want to adopt one.
+
+**Upgrading from a version that used `.env` or a cloned repo:**
+1. Download the new `docker-compose.yml` (see [Install the hub](#install-the-hub)) into the folder that holds your `data/` directory.
+2. Copy your values from `.env` into it, then delete `.env`. Do this before you run `docker compose up -d`: the compose file no longer reads `.env`, so the hub would start with default settings.
+3. On each relay host that used `.env`, copy those values into the relay's compose file the same way.
 
 **Back up** `data/netdispatch.db`, `data/configs/` and `data/secret_key`. ISOs can be re-downloaded, and the extracted copies are rebuilt with **Re-extract**. For a consistent database copy, stop the server first (`docker compose stop server`) or use `sqlite3 data/netdispatch.db ".backup backup.db"`.
 
@@ -436,17 +451,11 @@ docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exch
 
 ## Configuration reference
 
-[.env.example](.env.example) lists and explains every setting, grouped by topic:
-- hub addresses
-- sessions
-- OIDC
-- local admin
-- relays
-- boot behaviour
-- Windows share
-- relay options
+Settings are environment variables, written out with comments in the compose files themselves:
+- [docker-compose.yml](docker-compose.yml) (hub): addresses, local admin, OIDC, relays, boot behaviour and the Windows share. Rarely changed settings are listed commented out, with their defaults.
+- [docker-compose.relay.yml](docker-compose.relay.yml) (relay): hub URL, relay ID and key, and the relay options.
 
-After changing `.env`, apply it with `docker compose up -d`.
+After changing a setting, apply it with `docker compose up -d`.
 
 ## Security notes
 

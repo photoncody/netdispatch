@@ -12,7 +12,7 @@ SHARE_PATH="${SHARE_PATH:-/data/extracted}"
 
 if [ -z "${SMB_PASSWORD:-}" ]; then
   echo "[netdispatch-samba] SMB_PASSWORD is not set - the share is disabled."
-  echo "[netdispatch-samba] Set SMB_PASSWORD in .env (shared with the server container) to enable Windows Setup deployments."
+  echo "[netdispatch-samba] Set SMB_PASSWORD in docker-compose.yml (the x-smb block, shared with the server) to enable Windows Setup deployments."
   exec sleep infinity
 fi
 

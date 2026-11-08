@@ -15,7 +15,7 @@ log = logging.getLogger("netdispatch.config")
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
 
     # --- URLs -----------------------------------------------------------
     # Public URL users reach the UI at (through the reverse proxy). Used for
