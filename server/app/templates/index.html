@@ -403,7 +403,7 @@
             <button type="button" @click="copy(relayModal.compose)" class="rounded border border-slate-700 px-2 py-0.5 normal-case tracking-normal text-slate-200 hover:border-slate-500">Copy</button>
           </div>
           <pre class="max-h-96 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-200" x-text="relayModal.compose"></pre>
-          <p class="mt-2 text-xs text-slate-500">Save it on a Linux host attached to the target subnet and run <code class="font-mono text-slate-300">docker compose up -d --build</code>. The relay answers PXE clients through ProxyDHCP, so your existing DHCP server is left alone.</p>
+          <p class="mt-2 text-xs text-slate-500">Save it on a Linux host attached to the target subnet and run <code class="font-mono text-slate-300">docker compose up -d</code>. The relay answers PXE clients through ProxyDHCP, so your existing DHCP server is left alone.</p>
         </div>
       </template>
     </div>
