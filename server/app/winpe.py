@@ -97,6 +97,12 @@ def render_netdispatch_cmd(settings: Settings, iso: IsoImage, has_unattend: bool
     ]
     if has_unattend:
         lines += [
+            # Setup gets the file via /unattend, but scripts inside the answer file
+            # may look for it themselves. The schneegans.de generator's pe.cmd
+            # checks HKLM\System\Setup!UnattendFile (Setup's own first implicit
+            # search location) and <drive>:\autounattend.xml, never System32.
+            f"reg add HKLM\\System\\Setup /v UnattendFile /t REG_SZ /d {unattend} /f >nul",
+            f"copy /y {unattend} X:\\autounattend.xml >nul",
             f"echo netdispatch: starting Z:\\{setup} with {unattend}",
             f'"Z:\\{setup}" /unattend:{unattend}',
         ]
