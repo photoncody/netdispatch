@@ -169,9 +169,11 @@
             <dt class="text-slate-500">dnsmasq</dt><dd class="col-span-2" :class="r.dnsmasq_ok === false ? 'text-rose-300' : 'text-slate-300'" x-text="r.dnsmasq_ok === null ? '—' : (r.dnsmasq_ok ? 'running' : 'NOT running')"></dd>
             <dt class="text-slate-500">Last seen</dt><dd class="col-span-2 text-slate-300" :title="r.last_seen || ''" x-text="ago(r.last_seen)"></dd>
             <dt class="text-slate-500">Devices</dt><dd class="col-span-2 text-slate-300" x-text="devices.filter(d => d.relay_id === r.id).length"></dd>
+            <dt class="text-slate-500">Cache</dt><dd class="col-span-2" :class="cacheTone(r)" x-text="cacheLabel(r)"></dd>
           </dl>
           <div x-show="r.auto_registered" class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">Auto-registered with the bootstrap key. Rotate to issue a per-relay key.</div>
           <div class="mt-4 flex flex-wrap gap-2 text-xs">
+            <button type="button" @click="openCache(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Cache</button>
             <button type="button" @click="showCompose(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Compose snippet</button>
             <button type="button" @click="rotateKey(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Rotate key</button>
             <button type="button" @click="toggleRelay(r)" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500" x-text="r.enabled ? 'Disable' : 'Enable'"></button>
@@ -414,6 +416,74 @@
   </div>
 </div>
 
+<!-- ============================================================ cache modal -->
+<div x-show="cacheModal.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16" @keydown.escape.window="cacheModal.open = false">
+  <div class="w-full max-w-3xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="cacheModal.open = false">
+    <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+      <div>
+        <h3 class="font-semibold text-slate-100">Relay cache · <span x-text="cacheModal.relay.name"></span></h3>
+        <p class="text-xs text-slate-400">Images ticked here are downloaded once to the relay and served on its LAN. Until a copy is complete and current, machines boot from the hub as usual.</p>
+      </div>
+      <button type="button" @click="cacheModal.open = false" class="text-slate-400 hover:text-slate-100">✕</button>
+    </div>
+    <div class="space-y-4 p-5 text-sm">
+      <template x-if="cacheModal.relay.cache && !cacheModal.relay.cache.enabled">
+        <div class="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+          This relay isn't running with <code class="font-mono">RELAY_CACHE: "true"</code> (or hasn't reported since it started). Assignments are kept: the relay starts downloading once caching is on. See <span class="text-amber-200">Compose snippet</span> for the settings.
+        </div>
+      </template>
+      <template x-if="cacheModal.relay.cache && cacheModal.relay.cache.enabled">
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-4">
+          <div><dt class="text-slate-500">Served at</dt><dd class="font-mono text-slate-300" x-text="cacheModal.relay.cache.url || 'invalid CACHE_URL'"></dd></div>
+          <div><dt class="text-slate-500">HTTP / SMB</dt>
+            <dd><span :class="cacheModal.relay.cache.http_ok ? 'text-emerald-300' : 'text-rose-300'" x-text="cacheModal.relay.cache.http_ok ? 'up' : 'down'"></span> / <span :class="cacheModal.relay.cache.smb_ok ? 'text-emerald-300' : 'text-slate-400'" x-text="cacheModal.relay.cache.smb_ok ? 'up' : 'off'"></span></dd></div>
+          <div><dt class="text-slate-500">Disk free</dt><dd class="text-slate-300" x-text="cacheModal.relay.cache.disk_free == null ? '—' : fmtSize(cacheModal.relay.cache.disk_free) + ' of ' + fmtSize(cacheModal.relay.cache.disk_total)"></dd></div>
+          <div><dt class="text-slate-500">Last report</dt><dd class="text-slate-300" x-text="ago(cacheModal.relay.cache.reported_at)"></dd></div>
+        </dl>
+      </template>
+      <div x-show="cacheSpaceShort()" class="rounded-md border border-rose-500/30 bg-rose-500/10 p-2 text-xs text-rose-200">
+        The ticked images need about <span x-text="fmtSize(cacheSelectedBytes())"></span>, more than the relay has free. Some will stay in error until space is freed.
+      </div>
+      <div class="overflow-hidden rounded-lg border border-slate-800">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-900 text-[11px] uppercase tracking-wider text-slate-500">
+            <tr><th class="w-8 px-3 py-2"></th><th class="px-3 py-2 font-medium">Image</th><th class="px-3 py-2 font-medium">Size</th><th class="px-3 py-2 font-medium">On the relay</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <template x-for="it in cacheModal.items" :key="it.iso_id">
+              <tr class="align-top">
+                <td class="px-3 py-2"><input type="checkbox" class="mt-0.5 accent-emerald-500" :checked="cacheModal.selected.includes(it.iso_id)" @change="toggleCacheIso(it.iso_id, $event.target.checked)"></td>
+                <td class="px-3 py-2">
+                  <div class="text-slate-200" x-text="it.iso_name"></div>
+                  <div class="text-[11px] text-slate-500"><span x-text="it.boot_method"></span><span x-show="it.iso_status !== 'ready'" class="text-amber-300" x-text="' · image ' + it.iso_status + ' on the hub'"></span></div>
+                </td>
+                <td class="whitespace-nowrap px-3 py-2 text-slate-400" x-text="it.cache_bytes == null ? '—' : fmtSize(it.cache_bytes)"></td>
+                <td class="px-3 py-2">
+                  <template x-if="it.assigned">
+                    <div class="space-y-1">
+                      <span class="inline-block rounded-full px-2 py-0.5 text-[11px] ring-1" :class="cacheItemClass(it)" x-text="cacheItemLabel(it)"></span>
+                      <div x-show="it.status === 'syncing' && it.bytes_total" class="h-1.5 w-40 rounded bg-slate-800"><div class="h-1.5 rounded bg-sky-500" :style="'width:' + Math.min(100, Math.round(100 * it.bytes_done / it.bytes_total)) + '%'"></div></div>
+                      <div x-show="it.status === 'syncing' && it.bytes_total" class="text-[11px] text-slate-500" x-text="fmtSize(it.bytes_done) + ' of ' + fmtSize(it.bytes_total)"></div>
+                      <div x-show="it.message" class="text-[11px] text-slate-400" x-text="it.message"></div>
+                    </div>
+                  </template>
+                  <span x-show="!it.assigned" class="text-slate-600">not cached</span>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="cacheModal.items.length === 0"><td colspan="4" class="px-3 py-6 text-center text-slate-500">No images uploaded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="flex items-center justify-end gap-2 border-t border-slate-800 px-5 py-3">
+      <span x-show="cacheModal.dirty" class="mr-auto text-xs text-amber-300">Unsaved changes</span>
+      <button type="button" @click="cacheModal.open = false" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">Close</button>
+      <button type="button" @click="saveCache()" :disabled="!cacheModal.dirty" class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-40">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============================================================ ISO editor -->
 <div x-show="isoEdit.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-12" @keydown.escape.window="isoEdit.open = false">
   <div class="w-full max-w-3xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="isoEdit.open = false">
@@ -522,6 +592,7 @@ function netdispatch() {
     uploads: [], toasts: [],
     dispatch: { open: false, device: {}, iso_id: '', unattend_id: '', label: '', after_deploy: 'local', script: '' },
     relayModal: { open: false, mode: 'create', title: '', id: '', name: '', key: '', compose: '' },
+    cacheModal: { open: false, relay: {}, items: [], selected: [], dirty: false },
     isoEdit: { open: false, data: {}, initrds: '', files: [] },
     addDevice: { open: false, mac: '', label: '' },
     ua: { open: false, id: null, name: '', description: '', content: '', preview: '' },
@@ -577,6 +648,7 @@ function netdispatch() {
           const d = this.devices.find(x => x.id === this.dispatch.device.id);
           if (d) this.dispatch.device = d;
         }
+        if (this.cacheModal.open) await this.loadCache();
         this.lastRefresh = new Date(); this.refreshError = false;
       } catch (e) { this.refreshError = true; }
     },
@@ -728,6 +800,70 @@ function netdispatch() {
     async toggleRelay(r) {
       try { await this.api('PATCH', `/api/relays/${encodeURIComponent(r.id)}`, { enabled: !r.enabled }); this.refresh(false); }
       catch (e) { this.toast(e.message, true); }
+    },
+    cacheLabel(r) {
+      const c = r.cache;
+      if (!c) return '—';
+      if (!c.enabled) return c.assigned ? `off · ${c.assigned} assigned` : 'off';
+      const parts = [`${c.usable}/${c.assigned} ready`];
+      if (c.syncing) parts.push('syncing');
+      if (c.errors) parts.push(`${c.errors} error`);
+      if (!c.http_ok) parts.push('HTTP down');
+      if (c.disk_free != null) parts.push(this.fmtSize(c.disk_free) + ' free');
+      return parts.join(' · ');
+    },
+    cacheTone(r) {
+      const c = r.cache;
+      if (!c || !c.enabled) return c && c.assigned ? 'text-amber-300' : 'text-slate-500';
+      if (!c.http_ok || c.errors) return 'text-rose-300';
+      return c.usable === c.assigned ? 'text-emerald-300' : 'text-sky-300';
+    },
+    cacheItemLabel(it) {
+      if (it.usable) return 'ready';
+      if (it.stale) return 'outdated - resyncing';
+      return ({ pending: 'pending', syncing: 'downloading', error: 'error' })[it.status] || it.status;
+    },
+    cacheItemClass(it) {
+      if (it.usable) return 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30';
+      if (it.stale) return 'bg-amber-500/10 text-amber-200 ring-amber-500/30';
+      return ({
+        syncing: 'bg-sky-500/10 text-sky-200 ring-sky-500/30',
+        error: 'bg-rose-500/10 text-rose-300 ring-rose-500/30',
+      })[it.status] || 'bg-slate-800 text-slate-300 ring-slate-600';
+    },
+    async openCache(r) {
+      this.cacheModal = { open: true, relay: r, items: [], selected: [], dirty: false };
+      try { await this.loadCache(); } catch (e) { this.toast(e.message, true); }
+    },
+    async loadCache() {
+      const res = await this.api('GET', `/api/relays/${encodeURIComponent(this.cacheModal.relay.id)}/cache`);
+      this.cacheModal.relay = res.relay;
+      this.cacheModal.items = res.items;
+      if (!this.cacheModal.dirty) this.cacheModal.selected = res.items.filter(i => i.assigned).map(i => i.iso_id);
+    },
+    toggleCacheIso(id, on) {
+      const s = this.cacheModal.selected.filter(x => x !== id);
+      if (on) s.push(id);
+      this.cacheModal.selected = s;
+      this.cacheModal.dirty = true;
+    },
+    cacheSelectedBytes() {
+      return this.cacheModal.items.filter(i => this.cacheModal.selected.includes(i.iso_id)).reduce((n, i) => n + (i.cache_bytes || 0), 0);
+    },
+    cacheSpaceShort() {
+      const c = this.cacheModal.relay.cache;
+      if (!c || !c.enabled || c.disk_free == null) return false;
+      // Bytes already on the relay don't need new space.
+      const have = this.cacheModal.items.filter(i => i.assigned && this.cacheModal.selected.includes(i.iso_id)).reduce((n, i) => n + (i.bytes_done || 0), 0);
+      return this.cacheSelectedBytes() - have > c.disk_free;
+    },
+    async saveCache() {
+      try {
+        const res = await this.api('PUT', `/api/relays/${encodeURIComponent(this.cacheModal.relay.id)}/cache`, { iso_ids: this.cacheModal.selected });
+        this.cacheModal.relay = res.relay; this.cacheModal.items = res.items; this.cacheModal.dirty = false;
+        this.toast('Cache assignments saved - the relay picks them up within a heartbeat');
+        this.refresh(false);
+      } catch (e) { this.toast(e.message, true); }
     },
     async deleteRelay(r) {
       if (!confirm(`Delete relay ${r.id}? A running relay with a valid bootstrap key would re-register itself.`)) return;

@@ -6,6 +6,12 @@ PUBLIC_URL) - never from the request's Host header. The one exception is the
 ``{iso_url}`` / ``{files_url}`` cmdline placeholders, which use
 ``Settings.effective_linux_fetch_url`` (LINUX_FETCH_URL, falling back to the
 boot URL) because initramfs downloaders such as busybox wget may lack TLS.
+
+When the device's relay holds a current copy of the image in its cache
+(``relay_cache.usable_cache``), ``BootContext.cache_base_url`` is set and the
+image's own files (tree, raw ISO and both placeholders) come from the relay
+instead. wimboot/memdisk and the secret-bearing ``/files/d/{token}`` files
+always come from the hub.
 """
 
 from __future__ import annotations
@@ -71,6 +77,8 @@ class BootContext:
     poll_seconds: int = 5
     # Base for the {iso_url} / {files_url} placeholders; empty = base_url.
     fetch_base_url: str = ""
+    # http://relay:port of a relay cache holding the image; empty = the hub.
+    cache_base_url: str = ""
 
     @property
     def fetch_url(self) -> str:
@@ -92,10 +100,22 @@ class BootContext:
             url += f"&result={result}"
         return url
 
+    def tree_base(self, iso: IsoImage) -> str:
+        """Base URL of the image's extracted files, for iPXE's own downloads."""
+        if self.cache_base_url:
+            return f"{self.cache_base_url}/tree/{iso.id}"
+        return files_url(self.base_url, iso)
+
+    def raw_url(self, iso: IsoImage) -> str:
+        if self.cache_base_url:
+            return f"{self.cache_base_url}/raw/{iso.id}/{quote(iso.filename)}"
+        return raw_iso_url(self.base_url, iso)
+
     def placeholders(self, iso: IsoImage) -> dict[str, str]:
+        cached = bool(self.cache_base_url)
         return {
-            "{iso_url}": raw_iso_url(self.fetch_url, iso),
-            "{files_url}": files_url(self.fetch_url, iso),
+            "{iso_url}": self.raw_url(iso) if cached else raw_iso_url(self.fetch_url, iso),
+            "{files_url}": self.tree_base(iso) if cached else files_url(self.fetch_url, iso),
             "{base_url}": self.base_url,
             "{mac}": self.mac,
             "{hostname}": self.hostname or "",
@@ -240,6 +260,8 @@ def render_payload(
     lines = _header(ctx, f"deploy {method}") + [
         f"echo netdispatch: deploying {ipxe_text(iso.name)} ({method}) to {ipxe_text(ctx.mac)}",
     ]
+    if ctx.cache_base_url:
+        lines.append(f"echo netdispatch: image files come from the relay cache at {ipxe_text(ctx.cache_base_url, 120)}")
     if method in (BOOT_WINDOWS_SETUP, BOOT_WINPE):
         lines += _wimboot_lines(ctx, iso, token, has_unattend and method == BOOT_WINDOWS_SETUP)
     elif method == BOOT_LINUX:
@@ -247,19 +269,19 @@ def render_payload(
     elif method == BOOT_MEMDISK and not ctx.is_efi:
         lines += [
             f"kernel {ctx.base_url}/files/boot/memdisk iso raw || goto failed",
-            f"initrd {raw_iso_url(ctx.base_url, iso)} || goto failed",
+            f"initrd {ctx.raw_url(iso)} || goto failed",
             "boot || goto failed",
         ]
     else:  # sanboot, or memdisk requested on UEFI (memdisk is BIOS-only)
         if method == BOOT_MEMDISK:
             lines.append("echo netdispatch: memdisk is BIOS-only, using sanboot on UEFI")
-        lines += [f"sanboot --no-describe {raw_iso_url(ctx.base_url, iso)} || goto failed"]
+        lines += [f"sanboot --no-describe {ctx.raw_url(iso)} || goto failed"]
     lines += _failure_tail(ctx)
     return "\n".join(lines)
 
 
 def _wimboot_lines(ctx: BootContext, iso: IsoImage, token: str, with_unattend: bool) -> list[str]:
-    base = files_url(ctx.base_url, iso)
+    base = ctx.tree_base(iso)
     lines = [f"kernel {ctx.base_url}/files/boot/wimboot gui || goto failed"]
     if iso.bcd_path:
         lines.append(f"initrd {base}/{qpath(iso.bcd_path)} BCD || goto failed")
@@ -302,7 +324,7 @@ def render_cmdline(ctx: BootContext, iso: IsoImage) -> str:
 
 
 def _linux_lines(ctx: BootContext, iso: IsoImage) -> list[str]:
-    base = files_url(ctx.base_url, iso)
+    base = ctx.tree_base(iso)
     if not iso.kernel_path:
         return ["echo netdispatch: this image has no kernel path configured", "goto failed"]
     args = render_cmdline(ctx, iso)

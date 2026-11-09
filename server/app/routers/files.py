@@ -13,6 +13,7 @@ FileResponse honours HTTP Range requests, which iPXE's sanboot relies on.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
@@ -23,6 +24,7 @@ from ..config import Settings
 from ..database import get_db
 from ..iso_tools import resolve_ci
 from ..models import ISO_READY, STATE_BOOTING, STATE_DEPLOYING, Device, IsoImage
+from ..relay_cache import usable_cache
 from ..unattend import device_context, read_template, render
 from ..winpe import WINPESHL_INI, render_netdispatch_cmd
 
@@ -86,7 +88,13 @@ def deployment_file(token: str, name: str, request: Request, db: Session = Depen
     if name == "netdispatch.cmd":
         if not settings.smb_password:
             log.error("SMB_PASSWORD is not configured; WinPE cannot map the install share")
-        script = render_netdispatch_cmd(settings, iso, device.unattend_id is not None, device.mac)
+        # Same decision /boot made a moment ago; either answer works, because
+        # the script falls back to the hub's share if the relay's fails.
+        cache = usable_cache(db, settings, request.app.state.manifests, device.relay_id, iso)
+        relay_host = urlparse(cache.cache_url).hostname if cache and cache.cache_url and cache.smb_ok else None
+        script = render_netdispatch_cmd(
+            settings, iso, device.unattend_id is not None, device.mac, relay_smb_host=relay_host
+        )
         return PlainTextResponse(script, headers=NO_STORE)
 
     if name == "autounattend.xml":

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..database import get_db
+from ..relay_cache import usable_cache
 from ..models import (
     ISO_READY,
     STATE_BOOTING,
@@ -123,11 +124,20 @@ def boot(
             device.last_event = "assigned image is not available - returned to hold loop"
             script = render_message(ctx, "assigned image is not available - returning to hold loop")
         else:
+            cache = usable_cache(db, settings, request.app.state.manifests, device.relay_id, iso)
+            if cache is not None:
+                ctx.cache_base_url = cache.cache_url or ""
             script = render_payload(ctx, iso, device.deploy_token, has_unattend=device.unattend_id is not None)
             device.state = STATE_BOOTING
             device.payload_served_at = now
-            device.last_event = f"payload served: {iso.name}"
-            log.info("serving %s (%s) to %s", iso.name, iso.boot_method, norm)
+            device.last_event = f"payload served: {iso.name}" + (" (relay cache)" if cache else "")
+            log.info(
+                "serving %s (%s) to %s%s",
+                iso.name,
+                iso.boot_method,
+                norm,
+                f" from relay cache {cache.cache_url}" if cache else "",
+            )
     elif device.state == STATE_BOOTING:
         # The client came back to PXE after booting its payload (e.g. Windows
         # Setup rebooting). Never re-serve the payload: that would loop forever.

@@ -18,6 +18,8 @@ WINPESHL_INI = '[LaunchApps]\r\n"netdispatch.cmd"\r\n'
 # DIAG_EVERY attempts after that.
 DIAG_FIRST = 3
 DIAG_EVERY = 10
+# Failed attempts on a relay's cache share before switching to the hub's.
+RELAY_TRIES = 3
 
 
 def _batch_literal(value: str) -> str:
@@ -50,9 +52,16 @@ def _diagnostics(host: str) -> list[str]:
     ]
 
 
-def render_netdispatch_cmd(settings: Settings, iso: IsoImage, has_unattend: bool, mac: str) -> str:
-    host = settings.effective_smb_host
-    share = f"\\\\{host}\\{settings.smb_share}\\{iso.id}"
+def render_netdispatch_cmd(
+    settings: Settings, iso: IsoImage, has_unattend: bool, mac: str, relay_smb_host: str | None = None
+) -> str:
+    """``relay_smb_host``: the device's relay holds the image in its cache, so
+    map that relay's share first and fall back to the hub's after a few tries."""
+    hub_host = settings.effective_smb_host
+    hub_share = f"\\\\{hub_host}\\{settings.smb_share}\\{iso.id}"
+    share = f"\\\\{relay_smb_host}\\{settings.smb_share}\\{iso.id}" if relay_smb_host else hub_share
+    # Diagnostics ping whichever host the script is currently trying.
+    host = "%ND_HOST%" if relay_smb_host else hub_host
     setup = (iso.setup_path or "setup.exe").replace("/", "\\").lstrip("\\")
     user = _batch_literal(settings.smb_username)
     password = _batch_literal(settings.smb_password)
@@ -66,6 +75,14 @@ def render_netdispatch_cmd(settings: Settings, iso: IsoImage, has_unattend: bool
         "wpeinit",
         "wpeutil WaitForNetwork >nul 2>&1",
         f'set "ND_SHARE={_batch_literal(share)}"',
+    ]
+    if relay_smb_host:
+        lines += [
+            f'set "ND_HOST={_batch_literal(relay_smb_host)}"',
+            f'set "ND_HUB_SHARE={_batch_literal(hub_share)}"',
+            "echo netdispatch: using the install share cached on this site's relay",
+        ]
+    lines += [
         "set ND_TRIES=0",
         ":connect",
         "net use Z: /delete /y >nul 2>&1",
@@ -76,6 +93,10 @@ def render_netdispatch_cmd(settings: Settings, iso: IsoImage, has_unattend: bool
         f"if %ND_TRIES%=={DIAG_FIRST} call :diag",
         f"set /a ND_MOD=ND_TRIES %% {DIAG_EVERY}",
         "if %ND_MOD%==0 call :diag",
+    ]
+    if relay_smb_host:
+        lines.append(f"if %ND_TRIES%=={RELAY_TRIES} if defined ND_HUB_SHARE goto use_hub")
+    lines += [
         # choice gives a way out to a prompt (winpeshl has no Shift+F10). If it is
         # missing or has no console it returns >= 255: fall back to a plain wait.
         'choice /c RC /t 10 /d R /n /m "netdispatch: retrying in 10 seconds - press C for a command prompt " 2>nul',
@@ -89,6 +110,18 @@ def render_netdispatch_cmd(settings: Settings, iso: IsoImage, has_unattend: bool
         "echo netdispatch: type EXIT to leave this prompt and retry the share.",
         "cmd /k",
         "goto connect",
+    ]
+    if relay_smb_host:
+        lines += [
+            ":use_hub",
+            "echo netdispatch: the relay's share is not answering - switching to the hub's share",
+            'set "ND_SHARE=%ND_HUB_SHARE%"',
+            f'set "ND_HOST={_batch_literal(hub_host)}"',
+            'set "ND_HUB_SHARE="',
+            "set ND_TRIES=0",
+            "goto connect",
+        ]
+    lines += [
         ":connected",
         f'if not exist "Z:\\{setup}" (',
         f"  echo netdispatch: Z:\\{setup} not found on the share - dropping to a command prompt",

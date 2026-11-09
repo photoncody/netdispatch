@@ -63,14 +63,15 @@ COPY ipxe/embed.ipxe /out/secureboot/autoexec.ipxe
 
 # ----------------------------------------------------------------- relay
 FROM alpine:3.22
-RUN apk add --no-cache dnsmasq curl iproute2 tini ca-certificates
+RUN apk add --no-cache dnsmasq curl iproute2 tini ca-certificates \
+      jq lighttpd samba-server samba-common-tools tzdata
 COPY certs/ /usr/local/share/ca-certificates/netdispatch/
 RUN find /usr/local/share/ca-certificates/netdispatch -type f ! -name '*.crt' -delete \
  && update-ca-certificates 2>/dev/null || true
 COPY --from=ipxe /out/ /tftp/
 COPY --from=ipxe-signed /out/ /tftp/
-COPY entrypoint.sh heartbeat.sh /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/heartbeat.sh /tftp/secureboot \
+COPY entrypoint.sh heartbeat.sh cache-sync.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/heartbeat.sh /usr/local/bin/cache-sync.sh /tftp/secureboot \
  && find /tftp -type f -exec chmod 0644 {} + \
  && mkdir -p /run/netdispatch
 ENV RELAY_VERSION=0.1.0

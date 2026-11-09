@@ -22,6 +22,7 @@ from .auth import router as auth_router
 from .config import Settings
 from .database import init_db, make_engine, make_sessionmaker
 from .iso_tools import ExtractionManager, recover_on_startup
+from .relay_cache import ManifestCache
 from .routers import boot, devices, files, isos, relays, ui, unattend
 from .unattend import sync_from_disk
 
@@ -67,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.sessionmaker = session_factory
     app.state.extractor = extractor
+    app.state.manifests = ManifestCache()
     app.state.templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
     # Cache-buster for /static assets: changes whenever the image is rebuilt.
     css = APP_DIR / "static" / "app.css"

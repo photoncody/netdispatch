@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -44,6 +44,13 @@ ISO_EXTRACTING = "extracting"
 ISO_READY = "ready"
 ISO_ERROR = "error"
 ISO_MISSING = "missing"
+
+# Relay cache item statuses (reported by the relay)
+CACHE_PENDING = "pending"  # assigned, not downloaded yet
+CACHE_SYNCING = "syncing"  # downloading
+CACHE_READY = "ready"  # complete copy of the reported etag
+CACHE_ERROR = "error"  # e.g. not enough disk space
+CACHE_STATUSES = {CACHE_PENDING, CACHE_SYNCING, CACHE_READY, CACHE_ERROR}
 
 
 class Relay(Base):
@@ -99,6 +106,46 @@ class IsoImage(Base):
     @initrd_paths.setter
     def initrd_paths(self, value: list[str]) -> None:
         self.initrd_paths_json = json.dumps([v for v in value if v])
+
+
+class RelayCache(Base):
+    """A caching relay's last self-report (sent with its heartbeat).
+
+    A separate table rather than columns on ``relays``: there are no
+    migrations, and ``create_all()`` only adds missing tables.
+    """
+
+    __tablename__ = "relay_caches"
+
+    relay_id: Mapped[str] = mapped_column(
+        ForeignKey("relays.id", ondelete="CASCADE"), primary_key=True
+    )
+    # Validated http://host[:port] the relay serves its cache at; None = invalid.
+    cache_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    http_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    smb_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    disk_free: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    disk_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RelayCacheItem(Base):
+    """An ISO assigned to a relay's cache, plus the relay's progress on it."""
+
+    __tablename__ = "relay_cache_items"
+
+    relay_id: Mapped[str] = mapped_column(
+        ForeignKey("relays.id", ondelete="CASCADE"), primary_key=True
+    )
+    iso_id: Mapped[int] = mapped_column(ForeignKey("isos.id", ondelete="CASCADE"), primary_key=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Reported by the relay: the manifest etag its copy matches (when ready).
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=CACHE_PENDING)
+    bytes_done: Mapped[int] = mapped_column(BigInteger, default=0)
+    bytes_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class UnattendConfig(Base):

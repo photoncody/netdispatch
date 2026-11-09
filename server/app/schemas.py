@@ -20,6 +20,27 @@ RELAY_ID_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,62}$"
 
 
 # ---------------------------------------------------------------- requests
+class CacheItemIn(BaseModel):
+    """One image in a caching relay's report. Lenient: a bad value must not
+    make the whole heartbeat fail (relay_cache.apply_report cleans it up)."""
+
+    iso_id: int
+    etag: str | None = None
+    status: str = "pending"
+    bytes_done: int = 0
+    bytes_total: int = 0
+    message: str | None = None
+
+
+class CacheReportIn(BaseModel):
+    url: str | None = None
+    http_ok: bool = False
+    smb_ok: bool = False
+    disk_free: int | None = Field(default=None, ge=0)
+    disk_total: int | None = Field(default=None, ge=0)
+    items: list[CacheItemIn] = Field(default_factory=list, max_length=2000)
+
+
 class HeartbeatIn(BaseModel):
     relay_id: str = Field(pattern=RELAY_ID_PATTERN)
     name: str | None = Field(default=None, max_length=128)
@@ -28,6 +49,12 @@ class HeartbeatIn(BaseModel):
     interface: str | None = Field(default=None, max_length=64)
     version: str | None = Field(default=None, max_length=64)
     dnsmasq_ok: bool | None = None
+    # Only sent by relays running with RELAY_CACHE=true.
+    cache: CacheReportIn | None = None
+
+
+class CacheAssignIn(BaseModel):
+    iso_ids: list[int] = Field(default_factory=list, max_length=2000)
 
 
 class RelayCreate(BaseModel):
@@ -83,9 +110,9 @@ def _age(dt: datetime | None) -> float | None:
     return (utcnow() - dt).total_seconds() if dt else None
 
 
-def relay_out(r: Relay, settings: Settings) -> dict:
+def relay_out(r: Relay, settings: Settings, cache: dict | None = None) -> dict:
     age = _age(r.last_seen)
-    return {
+    out = {
         "id": r.id,
         "name": r.name,
         "enabled": r.enabled,
@@ -100,6 +127,9 @@ def relay_out(r: Relay, settings: Settings) -> dict:
         "online": age is not None and age <= settings.relay_offline_seconds and r.enabled,
         "created_at": iso(r.created_at),
     }
+    if cache is not None:
+        out["cache"] = cache
+    return out
 
 
 def device_status(d: Device, settings: Settings) -> str:
