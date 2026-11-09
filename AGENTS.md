@@ -15,6 +15,7 @@ PXE boot coordination, hub-and-spoke.
 - **Samba sidecar (`samba/`)** is a read-only SMB share of `data/extracted/`. WinPE runs Windows Setup from it.
 - **Relay (`relay/`)** is Alpine + dnsmasq in **ProxyDHCP + TFTP** mode, plus a curl heartbeat. It is stateless and runs with host networking. Its iPXE binaries are **compiled from source** (pinned `v2.0.0`) with an embedded script.
   - For `SECURE_BOOT=true` it also ships the iPXE project's **prebuilt signed** binaries in `/tftp/secureboot/`, downloaded at build time and pinned by SHA-256 (see "Secure Boot" below).
+  - With `RELAY_CACHE=true` it is no longer stateless: `cache-sync.sh` mirrors the ISOs an admin assigned to it into a `/cache` volume and serves them on the LAN with lighttpd (HTTP) and smbd (Windows Setup). The hub decides per deployment whether the payload URLs point at the relay or at itself (see "Relay cache" below).
 
 Boot chain:
 1. Firmware PXE → relay ProxyDHCP → TFTP `ipxe.efi` / `undionly.kpxe`.
@@ -30,17 +31,20 @@ Boot chain:
 |---|---|
 | `server/app/main.py` | `create_app(settings)` factory: middleware order, routers, `asset_version` |
 | `server/app/config.py` | `Settings` (pydantic-settings). All config comes from env vars, nothing else. |
-| `server/app/models.py` | `Relay`, `Device`, `IsoImage`, `UnattendConfig`, plus state/method constants |
+| `server/app/models.py` | `Relay`, `Device`, `IsoImage`, `UnattendConfig`, `RelayCache`, `RelayCacheItem`, plus state/method constants |
 | `server/app/auth.py` | pure-ASGI `AuthMiddleware` (exemptions + CSRF header), OIDC routes, local login, rate limit |
 | `server/app/pxe_engine.py` | **all iPXE script text**: wait, local, payload (wimboot/linux/sanboot/memdisk) |
 | `server/app/routers/boot.py` | `/boot` state machine |
 | `server/app/routers/files.py` | `/files/boot`, `/files/iso/{id}/raw`, `/files/iso/{id}/tree`, `/files/d/{token}` |
 | `server/app/iso_tools.py` | 7-Zip extraction (background threads), layout detection, `resolve_ci()` safe paths |
+| `server/app/relay_cache.py` | relay cache: per-image manifests + etags (`ManifestCache`), `usable_cache()` routing decision, heartbeat cache reports |
 | `server/app/winpe.py` | `winpeshl.ini` + `netdispatch.cmd` (net use + `setup.exe /unattend`) |
 | `server/app/unattend.py` | template files in `data/configs`, sandboxed Jinja rendering, XML validation |
 | `server/app/templates/` | `index.html` (whole SPA), `login.html` |
 | `server/tests/` | pytest (unit + TestClient integration) |
-| `relay/entrypoint.sh` | env validation, interface/subnet detection, writes `dnsmasq.conf` + `/tftp/netdispatch.ipxe` |
+| `relay/entrypoint.sh` | env validation, interface/subnet detection, writes `dnsmasq.conf` + `/tftp/netdispatch.ipxe` (+ lighttpd config with `RELAY_CACHE=true`) |
+| `relay/heartbeat.sh` | heartbeat loop; with `RELAY_CACHE=true` also reports cache status and records the hub's `cache_manifest_etag` |
+| `relay/cache-sync.sh` | `RELAY_CACHE=true`: manifest sync (resumable curl, rate limit, sync window), deletes unassigned files, writes `smb.conf`, supervises lighttpd + smbd |
 | `relay/ipxe/embed.ipxe`, `relay/ipxe/general.h` | compiled into the iPXE binaries. `embed.ipxe` is also shipped as `secureboot/autoexec.ipxe`. |
 | `relay/Dockerfile` | `ipxe` stage (compile), `ipxe-signed` stage (download signed shim + iPXE, SHA-pinned), runtime |
 | `tests/e2e/` | QEMU end-to-end harness (isolated bridge, fake router DHCP, BIOS/UEFI/Windows VMs) |
@@ -106,6 +110,7 @@ You need these packages: `qemu-system-x86 ovmf dnsmasq-base`.
    sudo tests/e2e/vm.sh uefi
    ```
    The other modes are `bios` and `win new`.
+   - **Relay cache:** give `ndtest0` a second address (`sudo ip addr add 10.77.0.2/24 dev ndtest0`), publish the hub's samba on `10.77.0.1:445` only (a compose override with `ports: !override`), and run the relay with `-e RELAY_CACHE=true -e CACHE_BIND=10.77.0.2 -e CACHE_URL=http://10.77.0.2:8080 -v /var/tmp/nd-relay-cache:/cache`. Both smbds can then listen on port 445 on one host. Assign images with `PUT /api/relays/<id>/cache`. Relay downloads show as `[netdispatch-cache] http …` lines in `docker logs`; `smbstatus -s /etc/samba/netdispatch.conf` inside the relay lists WinPE's session.
    - `uefi-sb` and `win-sb new` run OVMF with Secure Boot enforced and only Microsoft's keys enrolled (`OVMF_CODE_4M.secboot.fd` + `OVMF_VARS_4M.ms.fd`, SMM on).
    - They need a relay started with `-e SECURE_BOOT=true`. Without it, OVMF refuses our `ipxe.efi` with *Access Denied*. That's a useful negative check.
 4. Inspect what happened:
@@ -131,6 +136,13 @@ Verified with this harness:
   - the DHCP fallback when `autoexec.ipxe` is missing;
   - the Windows 11 unattended install;
   - BIOS and non-Secure Boot UEFI clients, unchanged, on the same relay.
+- With a caching relay (`RELAY_CACHE=true`):
+  - the sync of Windows 11 and Debian netinst, with every cached file byte-identical to the hub's;
+  - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
+  - UEFI `linux` (kernel + initrd) and `sanboot` (HTTP Range) from the relay, with clients fetching only wimboot and `/files/d/*` from the hub;
+  - Windows Setup over the relay's SMB share, unattended through to the registered hostname;
+  - the fallback to the hub while an image is re-extracted.
+  - **Not verified:** WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). In this harness WinPE restarts after one to three failed `net use` attempts, before attempt 3 is reached. That also happens on main with the hub's own share down (samba stopped), so it's a pre-existing problem with the share retry loop, not with the relay cache. Until it's understood, an unreachable relay port 445 means a failed Windows install at that site (README says so).
 
 ## Core invariants (don't break these)
 
@@ -149,6 +161,7 @@ Verified with this harness:
 4. **Absolute URLs come only from `Settings.boot_url`** (`BOOT_BASE_URL`, falling back to `PUBLIC_URL`). Never use the request `Host` or `X-Forwarded-Host`. The OIDC redirect URI is always `PUBLIC_URL/auth/oidc/callback`.
    - The one exception is the `{iso_url}` / `{files_url}` cmdline placeholders. They use `Settings.effective_linux_fetch_url` (`LINUX_FETCH_URL`, falling back to the boot URL) through `BootContext.fetch_url`, because casper and live-boot download with busybox `wget`, which has no TLS.
    - iPXE's own `kernel`/`initrd` lines and every `/files/d/{token}` URL stay on `boot_url`, so secrets never go over the plain-HTTP fetch URL.
+   - The second exception is the relay cache. When `relay_cache.usable_cache()` says the device's relay holds a current copy, `BootContext.cache_base_url` replaces the hub for the image's own files: the tree, the raw ISO, and both placeholders. That URL comes only from the relay's key-authenticated heartbeat and is checked by `valid_cache_url()` (`http://host[:port]`, nothing else), never from the request. wimboot/memdisk and `/files/d/{token}` stay on `boot_url`.
 5. **Every variable string echoed into an iPXE script goes through `ipxe_text()`.**
    - It strips `$ { } & | # " '` and similar characters. Labels and relay names are user-controlled, and `${…}` would be expanded and `&&`/`||` parsed by iPXE.
    - Relay IDs go through `safe_slug()`.
@@ -157,8 +170,9 @@ Verified with this harness:
    - These are the unattend XML and the WinPE `.cmd` that carries SMB credentials.
    - Each deployment gets a new token. It is valid only while the device is `deploying` or `booting`, and is cleared on reset/local/return.
    - `/files/iso/*` is deliberately unauthenticated (boot clients can't log in), so never put secrets there.
+   - The one other place the SMB password leaves the hub is the relay cache manifest (`GET /api/relays/cache/manifest`, `X-Relay-Key` only), so a caching relay can serve the install share. It's only included when a `windows_setup` image is assigned.
 7. **Auth exemptions are an explicit allow-list** in `auth.py` (`EXEMPT_EXACT`, `EXEMPT_PREFIXES`).
-   - `/api/relays/heartbeat` is exempt and authenticated by `X-Relay-Key`.
+   - `/api/relays/heartbeat` and `/api/relays/cache/manifest` are exempt and authenticated by `X-Relay-Key`. `heartbeat` and `cache` are reserved relay IDs.
    - Relay *management* under `/api/relays` is not exempt.
    - Mutating `/api/*` calls require `X-Requested-With: netdispatch` (the CSRF guard). The frontend's `api()` helper and the upload XHR send it.
 
@@ -190,6 +204,17 @@ Verified with this harness:
   - `pxe-service` basenames that contain a dot are used verbatim, while names without one get `.0` appended.
   - `port=0` disables DNS. Keep it, since relays must not answer DNS.
 - **Relays need `network_mode: host` + `NET_ADMIN`.** Docker Desktop can't receive DHCP broadcasts.
+
+**Relay cache**
+- **The relay stores every path in ASCII lower case** (`relay_cache.ascii_lower()` writes the manifest's `dest`). lighttpd runs with `force-lowercase-filenames` and Samba with `case sensitive = yes` + `default case = lower` + `preserve case = no`. Together these give the relay the same case-insensitive lookups as the hub's `resolve_ci()`, including for paths an admin typed after `{files_url}`. That's also why `CACHE_DIR` must be lower case. An image with two paths that are equal in lower case (`kernel` and `KERNEL`, or a file `a` beside a directory `A/`) can't be stored that way: `build_manifest()` sends it with an `error` and no files, the relay drops its copy and reports the error, and clients always use the hub for it.
+- **Readiness is an exact etag match.** An image's etag hashes `(dest, size, mtime)` of its files only, so renames and boot-setting edits don't force a re-download, but re-extraction or a different file set does. `usable_cache()` also requires the relay online and enabled, `http_ok`, status `ready`, and `bytes_done` covering the manifest total. Anything else falls back to the hub. `smb_ok` only decides whether `netdispatch.cmd` maps the relay's share (boot files still come from the relay without it). Never make a deployment wait on the cache.
+- **Images that aren't `ready` on the hub** (being re-extracted) appear in the manifest as `{"id": N, "keep": true}`. The relay keeps its files but isn't used until it reports the new etag.
+- **Manifests hold hub-relative `src` paths.** The relay prefixes its own `CENTRAL_SERVER_URL`: the address it already reaches the hub at, which can differ from `BOOT_BASE_URL` (e.g. `127.0.0.1` for the hub-local relay).
+- **`ManifestCache` memoises** per image on `(updated_at, status, boot_method, cmdline, filename)` with a 5-minute TTL. Heartbeats every 30 s per relay and `/boot` would otherwise walk a Windows tree each time. Call `forget()` when an image is deleted.
+- **New tables, not new columns** (`relay_caches`, `relay_cache_items`), because there are no migrations. Rows are deleted explicitly in `delete_iso` and `delete_relay`.
+- **Downloads are `<file>.nd-<size>-<mtime>.part`, then renamed.** A partial file from an older version of the image never resumes into the new one. lighttpd denies `.part`; Samba vetoes it.
+- **WinPE tries the relay share 3 times, then the hub's** (`winpe.RELAY_TRIES`). `:diag` pings `%ND_HOST%`, whichever host it is currently trying. In the QEMU harness WinPE restarts before attempt 3 (see "Not verified" under the end-to-end test), so don't rely on this switch until that's fixed.
+- **Don't enable the cache on the hub-local relay:** smbd on the host network clashes with the samba container's published port 445.
 
 **Windows / SMB**
 - **Samba must allow execute.** Extracted files are 0644, so the share sets `acl allow execute always = yes`. Without it, WinPE says *Access is denied* on `setup.exe`.

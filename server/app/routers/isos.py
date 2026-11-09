@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 from sqlalchemy.orm import Session
 
+from .. import relay_cache
 from ..config import Settings
 from ..database import get_db
 from ..iso_tools import ExtractionManager, apply_detection, detect_layout, list_files, rescan, sanitize_filename
@@ -179,6 +180,9 @@ def delete_iso(iso_id: int, request: Request, delete_file: bool = True, db: Sess
             device.deploy_token = None
             device.last_event = f"image {iso.name} deleted - returned to hold loop"
         device.iso_id = None
+    # Relays drop their copy on the next sync: it's no longer in their manifest.
+    relay_cache.delete_for_iso(db, iso.id)
+    request.app.state.manifests.forget(iso.id)
     shutil.rmtree(settings.extracted_dir / str(iso.id), ignore_errors=True)
     if delete_file:
         (settings.isos_dir / iso.filename).unlink(missing_ok=True)

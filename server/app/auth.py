@@ -29,6 +29,7 @@ EXEMPT_EXACT = {
     "/logout",
     "/favicon.ico",
     "/api/relays/heartbeat",
+    "/api/relays/cache/manifest",
 }
 EXEMPT_PREFIXES = ("/files/", "/static/", "/auth/")
 

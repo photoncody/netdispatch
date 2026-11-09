@@ -98,7 +98,8 @@ A dispatch is **one-shot**. When an installer reboots the machine and it network
 | Machines being booted | relay on their segment | UDP 67, 68, 4011, 69 | PXE + TFTP (broadcast, same segment) |
 | Machines being booted | hub | TCP 8000 (or your proxy's 80/443) | boot scripts, kernels, images |
 | Machines installing Windows | hub | TCP 445 | Windows install share (SMB) |
-| Relays | hub | TCP 8000 / 443 | heartbeat |
+| Machines being booted | relay on their segment | TCP 8080 and 445 | only for relays that [cache images](#cache-images-on-a-relay) |
+| Relays | hub | TCP 8000 / 443 | heartbeat (and image downloads for caching relays) |
 | Admins | hub | TCP 443 / 8000 | dashboard |
 
 Your existing DHCP server must **not** hand out PXE boot options of its own (option 66/67, "next-server", "boot file name"). Remove them if they are set.
@@ -274,7 +275,7 @@ The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`
 ## Add relays
 
 1. In the dashboard, open **Relays → Add relay**.
-2. Enter an ID (lowercase, for example `office-vlan20`) and a display name, then click **Create relay**.
+2. Enter an ID (lowercase, for example `office-vlan20`) and a display name. Tick **Enable Relay Caching** or **Enable Secure Boot** if this relay needs them (see [Cache images on a relay](#cache-images-on-a-relay) and [UEFI Secure Boot](#uefi-secure-boot)), then click **Create relay**. The boxes start as you left them last time, and you can change them afterwards: the file below updates to match.
 3. Copy the **relay key**. It is shown only once.
 4. Copy the generated **docker-compose.yml**.
 5. On a Linux host attached to that network segment, save the file and start the relay:
@@ -300,6 +301,7 @@ Relay options (environment variables in the compose file):
 | `UEFI_BOOTFILE` | `ipxe.efi` | a UEFI machine's network card isn't detected. Try `snponly.efi`, which uses the firmware's own driver. |
 | `IPXE_CLIENTS` | `chainload` | `direct` skips loading netdispatch's iPXE on machines that already run iPXE, such as some VMs. Only works without HTTPS or a private CA. |
 | `SECURE_BOOT` | `false` | `true` lets UEFI machines boot with Secure Boot turned on. See [UEFI Secure Boot](#uefi-secure-boot). |
+| `RELAY_CACHE` | `false` | `true` keeps local copies of images on the relay. See [Cache images on a relay](#cache-images-on-a-relay) for this and the `CACHE_*` settings. |
 | `RELAY_LOG_DHCP` | `true` | set to `false` to quiet the logs once everything works |
 
 **Several VLANs on one host:** run one relay container per VLAN interface. Give each its own `RELAY_ID`, key and `RELAY_INTERFACE`.
@@ -316,7 +318,7 @@ docker compose --profile local-relay up -d
 
 ### UEFI Secure Boot
 
-By default, UEFI machines need Secure Boot turned off: the relay serves netdispatch's own iPXE build, which isn't signed. Set `SECURE_BOOT: "true"` on a relay to boot them with Secure Boot left on.
+By default, UEFI machines need Secure Boot turned off: the relay serves netdispatch's own iPXE build, which isn't signed. Set `SECURE_BOOT: "true"` on a relay to boot them with Secure Boot left on. Ticking **Enable Secure Boot** above the relay's compose file adds that line for you.
 
 With it set, 64-bit UEFI machines on that relay load the [iPXE project's signed binaries](https://ipxe.org/secboot) instead of netdispatch's build. A shim signed by Microsoft's UEFI CA (2011 and 2023) loads an iPXE build signed by the iPXE project. Machines with the standard Microsoft keys accept it, so you don't enroll any keys of your own. BIOS machines aren't affected. Machines with Secure Boot turned off boot the signed files too.
 
@@ -333,6 +335,46 @@ Limits of the signed iPXE:
 - **No private CA.** It only trusts public CAs, not certificates in `relay/certs/`. With an internal CA, give relays a plain `http://` hub URL.
 - **Prebuilt only.** iPXE options from `relay/ipxe/general.h` (`ping`, `nslookup`, `ntp`) aren't available.
 - `UEFI_BOOTFILE` still picks the variant: `ipxe.efi` (default) or `snponly.efi`.
+
+### Cache images on a relay
+
+At a site with a slow link to the hub, a relay can keep its own copy of the images that site uses. Machines there then download boot files, and Windows Setup's `install.wim`, from the relay instead of across the WAN. You still upload, edit and assign everything on the hub.
+
+1. On the relay, turn caching on and give it a volume with room for the images. Ticking **Enable Relay Caching** above the relay's compose file (**Add relay** or **Compose snippet**) adds both:
+   ```yaml
+       environment:
+         RELAY_CACHE: "true"
+       volumes:
+         - ./cache:/cache
+   ```
+   Then run `docker compose up -d`.
+2. In the dashboard, open **Relays → Cache** on that relay, tick the images it should keep, and click **Save**.
+3. The relay downloads them in the background. The dialog shows progress for each image. When an image shows **ready**, machines on that relay boot it from the relay.
+
+How it behaves:
+- **Machines always get an image.** Until the relay has a complete, current copy of an image, machines on that site boot it from the hub as before. The same happens if the relay is offline or its file server is down.
+- **Updates are automatic.** Re-extract or replace an image on the hub, and relays fetch only the files that changed. Meanwhile machines use the hub. Untick an image, or delete it on the hub, and relays delete their copy.
+- **What's stored** depends on the boot method: Windows Setup, WinPE and `linux` images keep their extracted files; `sanboot` and `memdisk` images keep the ISO. A `linux` image whose command line uses `{iso_url}` keeps both. That's about the ISO's size per image: a Windows ISO needs about 6 GB.
+- **Windows Setup** maps the relay's install share. If the relay reports its share down, WinPE uses the hub's share instead. The script also switches to the hub's share after 3 failed attempts, but see the note on port 445 below.
+- Kernels, initrds and ISOs come from the relay over plain HTTP, and Windows Setup uses SMB. The unattend file and the share password still come from the hub, through each deployment's one-time link.
+
+Caching settings on the relay:
+
+| Setting | Default | Use it when |
+|---|---|---|
+| `RELAY_CACHE` | `false` | `true` turns caching on |
+| `CACHE_DIR` | `/cache` | the cache volume is mounted elsewhere in the container (lowercase path) |
+| `CACHE_HTTP_PORT` | `8080` | something else on the relay host uses port 8080 |
+| `CACHE_URL` | `http://<relay IP>:<port>` | machines should reach the relay by another address, for example a DNS name |
+| `CACHE_BIND` | the relay's IP | the file server and share should listen on another IPv4 address of the host (`0.0.0.0` = all; the share then listens on every address of `RELAY_INTERFACE`) |
+| `CACHE_SMB` | `true` | set to `false` to run no share on the relay. Windows Setup then loads WinPE from the relay but reads the install files from the hub's share. |
+| `CACHE_RATE_LIMIT` | unlimited | downloads shouldn't fill the WAN link, e.g. `20M` (bytes per second, as in curl `--limit-rate`) |
+| `CACHE_SYNC_WINDOW` | any time | downloads should only start at night, e.g. `22:00-06:00`. A download that is running at the end of the window finishes, and the next one waits. Set `TZ` (e.g. `Europe/Berlin`) for local time. |
+
+Notes:
+- Machines on that segment need TCP 8080 (or your `CACHE_HTTP_PORT`) and TCP 445 to the relay host. Nothing else on the relay host may use port 445. **Check that 445 is open** before installing Windows there: if the relay's share runs but machines can't reach it, WinPE may restart before it gets to try the hub's share, and the install doesn't start. If you can't open it, set `CACHE_SMB: "false"`.
+- Don't turn caching on for the relay that runs on the hub host (`--profile local-relay`). Its port 445 clashes with the hub's own share, and there's no link to save.
+- The relay downloads from `CENTRAL_SERVER_URL`, the same address it sends heartbeats to.
 
 ## Add images
 
@@ -484,6 +526,8 @@ docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exch
 | With `SECURE_BOOT` on, a `linux` image fails to boot and the machine returns to the hold screen | The firmware refuses a kernel loaded directly under Secure Boot. Use `sanboot` with the distribution's ISO, or turn Secure Boot off on that machine. |
 | After an install, a UEFI machine stops in its firmware menu | No bootable disk entry follows the network entry in the boot order, or the install didn't complete. Check the boot order in the firmware. |
 | WinPE keeps printing *cannot reach \\\\…\\netdispatch\\N* | After 3 failed attempts, and every 10 after that, WinPE prints network diagnostics. *WinPE sees NO network adapter* means it has no driver for the network card: VirtIO VMs hit this (see [Drivers in WinPE](#drivers-in-winpe)). *No IPv4 address from DHCP* points at the cable, VLAN or DHCP server. Otherwise TCP 445 is blocked, `SMB_HOST` is wrong, or `SMB_PASSWORD` is empty. Press **C** during the 10-second wait for a command prompt; `exit` goes back to retrying. |
+| A cached image never shows **ready** on the relay | Open **Relays → Cache**. *not enough disk space* means the cache volume is too small. *waiting for the sync window* is expected outside `CACHE_SYNC_WINDOW`. If the relay shows caching **off**, `RELAY_CACHE` isn't `"true"`. Otherwise run `docker logs netdispatch-relay` and look for `[netdispatch-cache]` lines. |
+| Machines at a caching site still download from the hub | That's expected until the image is **ready** on the relay. Also check that the relay's HTTP server is **up**. If only its SMB share is down, Windows Setup still loads WinPE from the relay but reads the install files from the hub. The device's last event ends in *(relay cache)* when the relay served it. |
 | Windows Setup shows no disks | WinPE has no storage driver: Intel VMD/RST, VirtIO or RAID. See [Drivers in WinPE](#drivers-in-winpe). |
 | Setup still asks questions | No template was selected when dispatching, or the template lacks those settings. Check **Preview rendered**. For multi-edition media, set the image index or a product key in the template. |
 | Ubuntu/Mint or Debian live prints `wget: can't execute 'openssl'`, then *Unable to find a live file system on the network* | The initramfs can't download over HTTPS. Set `LINUX_FETCH_URL` to a plain-HTTP address of the hub. See [Linux live images and HTTPS](#linux-live-images-and-https). |
@@ -506,6 +550,7 @@ After changing a setting, apply it with `docker compose up -d`.
 - Booting machines can't sign in, so `/boot` and image downloads (`/files/…`) are open on your network. Anyone on a relay segment can make a device appear on the dashboard. Set `NEW_DEVICE_STATE=local` if unknown machines shouldn't wait on the hold screen.
 - Image contents are downloadable without signing in, so **put secrets in unattend templates, not in images**. A machine's unattend file, and the share credentials WinPE uses, are only reachable through a random, single-deployment link. The link stops working as soon as that deployment ends.
 - The Windows install share is read-only and requires a password. Guest access is refused.
+- A caching relay serves its images on its segment without sign-in (HTTP), and through a share that uses the hub's `SMB_USERNAME`/`SMB_PASSWORD`. That is the same exposure as the hub's own `/files/iso/…` and install share. The relay gets the share password from the hub with its relay key.
 - Relay keys are stored hashed and shown only once.
 - The dashboard is protected against cross-site request forgery.
 
@@ -513,7 +558,7 @@ After changing a setting, apply it with `docker compose up -d`.
 
 - Machines must be x86: legacy BIOS, or 64-bit UEFI. 32-bit UEFI and ARM devices aren't supported yet.
 - UEFI **Secure Boot** needs `SECURE_BOOT: "true"` on the relay, and then only works with signed payloads: Windows, and ISOs with a signed boot loader. See [UEFI Secure Boot](#uefi-secure-boot).
-- Relays don't cache images. Remote sites download them from the hub, so large Windows images cross the WAN link.
+- Relays only cache images an admin assigned to them, and download them in full beforehand: there's no on-demand caching of an image the first time a site uses it. See [Cache images on a relay](#cache-images-on-a-relay).
 - The dashboard shows when a payload was served and when the machine returned. It doesn't show progress inside Windows Setup.
 - There is a single administrator role.
 

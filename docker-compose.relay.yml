@@ -58,3 +58,19 @@ services:
       # Log every DHCP exchange (useful while setting up).
       # RELAY_LOG_DHCP: "true"
       # HEARTBEAT_INTERVAL: "30"
+
+      # --- Image cache (for sites with a slow link to the hub) ---------------
+      # "true": keep local copies of the images assigned to this relay in the
+      # hub (Relays -> Cache) and serve them on this LAN: HTTP on
+      # CACHE_HTTP_PORT, SMB on 445 for Windows Setup. Machines boot from the
+      # hub until an image is complete here. Also uncomment the volume below.
+      # RELAY_CACHE: "false"
+      # CACHE_HTTP_PORT: "8080"
+      # Address machines reach the cache at. Default: http://<relay IP>:<port>
+      # CACHE_URL: http://relay.site.example:8080
+      # CACHE_SMB: "true"             # "false": Windows Setup uses the hub's share
+      # CACHE_RATE_LIMIT: "20M"       # cap downloads from the hub (bytes/s)
+      # CACHE_SYNC_WINDOW: "22:00-06:00"  # only start downloads in this window
+      # TZ: Europe/Berlin             # time zone for CACHE_SYNC_WINDOW
+    # volumes:
+    #   - ./cache:/cache

@@ -31,6 +31,7 @@ from ..pxe_engine import (
     render_payload,
     render_wait,
 )
+from ..relay_cache import usable_cache
 from ..schemas import DeployIn, DeviceCreate, DeviceUpdate, device_out
 from .boot import context_for
 
@@ -171,6 +172,9 @@ def preview_script(device_id: int, request: Request, db: Session = Depends(get_d
     relay = db.get(Relay, device.relay_id) if device.relay_id else None
     ctx = context_for(device, relay, settings)
     if device.state in (STATE_DEPLOYING, STATE_BOOTING) and device.iso and device.deploy_token:
+        cache = usable_cache(db, settings, request.app.state.manifests, device.relay_id, device.iso)
+        if cache is not None:
+            ctx.cache_base_url = cache.cache_url or ""
         script = render_payload(ctx, device.iso, device.deploy_token, device.unattend_id is not None)
         if device.state == STATE_BOOTING:
             script = (
