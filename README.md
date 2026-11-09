@@ -275,7 +275,7 @@ The local `admin` account (`FALLBACK_ADMIN_USERNAME` / `FALLBACK_ADMIN_PASSWORD`
 ## Add relays
 
 1. In the dashboard, open **Relays → Add relay**.
-2. Enter an ID (lowercase, for example `office-vlan20`) and a display name, then click **Create relay**.
+2. Enter an ID (lowercase, for example `office-vlan20`) and a display name. Tick **Enable Relay Caching** or **Enable Secure Boot** if this relay needs them (see [Cache images on a relay](#cache-images-on-a-relay) and [UEFI Secure Boot](#uefi-secure-boot)), then click **Create relay**. The boxes start as you left them last time, and you can change them afterwards: the file below updates to match.
 3. Copy the **relay key**. It is shown only once.
 4. Copy the generated **docker-compose.yml**.
 5. On a Linux host attached to that network segment, save the file and start the relay:
@@ -318,7 +318,7 @@ docker compose --profile local-relay up -d
 
 ### UEFI Secure Boot
 
-By default, UEFI machines need Secure Boot turned off: the relay serves netdispatch's own iPXE build, which isn't signed. Set `SECURE_BOOT: "true"` on a relay to boot them with Secure Boot left on.
+By default, UEFI machines need Secure Boot turned off: the relay serves netdispatch's own iPXE build, which isn't signed. Set `SECURE_BOOT: "true"` on a relay to boot them with Secure Boot left on. Ticking **Enable Secure Boot** above the relay's compose file adds that line for you.
 
 With it set, 64-bit UEFI machines on that relay load the [iPXE project's signed binaries](https://ipxe.org/secboot) instead of netdispatch's build. A shim signed by Microsoft's UEFI CA (2011 and 2023) loads an iPXE build signed by the iPXE project. Machines with the standard Microsoft keys accept it, so you don't enroll any keys of your own. BIOS machines aren't affected. Machines with Secure Boot turned off boot the signed files too.
 
@@ -340,7 +340,7 @@ Limits of the signed iPXE:
 
 At a site with a slow link to the hub, a relay can keep its own copy of the images that site uses. Machines there then download boot files, and Windows Setup's `install.wim`, from the relay instead of across the WAN. You still upload, edit and assign everything on the hub.
 
-1. On the relay, turn caching on and give it a volume with room for the images:
+1. On the relay, turn caching on and give it a volume with room for the images. Ticking **Enable Relay Caching** above the relay's compose file (**Add relay** or **Compose snippet**) adds both:
    ```yaml
        environment:
          RELAY_CACHE: "true"

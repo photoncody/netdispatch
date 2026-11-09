@@ -21,13 +21,26 @@ router = APIRouter(prefix="/api/relays", tags=["relays"])
 RESERVED_IDS = {"heartbeat", "cache"}
 
 
-def compose_snippet(settings: Settings, relay_id: str, name: str, key: str | None) -> str:
+KEY_PLACEHOLDER = "<paste the relay key here>"
+
+
+def compose_snippet(
+    settings: Settings,
+    relay_id: str,
+    name: str,
+    key: str | None,
+    cache: bool = False,
+    secure_boot: bool = False,
+) -> str:
+    """The relay's docker-compose.yml. ``cache`` and ``secure_boot`` are the
+    dashboard's checkboxes: they switch on RELAY_CACHE (plus its volume) and
+    SECURE_BOOT, so nobody has to uncomment YAML by hand."""
     source = (
         f"    image: {settings.relay_image}\n"
         if settings.relay_image
         else f"    build: {settings.relay_build_context}\n"
     )
-    key_line = key or "<paste the relay key here>"
+    key_line = key or KEY_PLACEHOLDER
     safe_name = name.replace('"', "'")
     return (
         "# docker-compose.yml for a netdispatch PXE relay.\n"
@@ -49,16 +62,25 @@ def compose_snippet(settings: Settings, relay_id: str, name: str, key: str | Non
         "      # SUBNET_RANGE: 192.168.20.0,proxy   # default: derived from RELAY_INTERFACE\n"
         "      # UEFI_BOOTFILE: snponly.efi         # use firmware NIC drivers on UEFI\n"
         "      # IPXE_CLIENTS: direct               # let NIC-ROM iPXE skip the netdispatch iPXE build\n"
-        '      # SECURE_BOOT: "true"                # boot UEFI machines with Secure Boot on (signed iPXE)\n'
         '      # RELAY_LOG_DHCP: "false"            # quiet the logs once everything works\n'
-        "      # Keep local copies of the ISOs assigned in the hub (Relays -> Cache) and serve\n"
-        "      # them on this LAN (HTTP on CACHE_HTTP_PORT, SMB on 445 for Windows Setup).\n"
-        '      # RELAY_CACHE: "true"                # also uncomment the volume below\n'
-        '      # CACHE_RATE_LIMIT: "20M"            # cap downloads from the hub (curl --limit-rate)\n'
-        '      # CACHE_SYNC_WINDOW: "22:00-06:00"   # only start downloads in this window (TZ)\n'
-        "      # TZ: Europe/Berlin\n"
-        "    # volumes:\n"
-        "    #   - ./cache:/cache\n"
+        + (
+            "      # Boot UEFI machines with Secure Boot on (the iPXE project's signed binaries).\n"
+            '      SECURE_BOOT: "true"\n'
+            if secure_boot
+            else ""
+        )
+        + (
+            "      # Keep local copies of the ISOs assigned in the hub (Relays -> Cache) and serve\n"
+            "      # them on this LAN: HTTP on port 8080, SMB on 445 for Windows Setup.\n"
+            '      RELAY_CACHE: "true"\n'
+            '      # CACHE_RATE_LIMIT: "20M"            # cap downloads from the hub (curl --limit-rate)\n'
+            '      # CACHE_SYNC_WINDOW: "22:00-06:00"   # only start downloads in this window (TZ)\n'
+            "      # TZ: Europe/Berlin\n"
+            "    volumes:\n"
+            "      - ./cache:/cache                     # needs room for the assigned images\n"
+            if cache
+            else ""
+        )
     )
 
 
@@ -204,7 +226,7 @@ def create_relay(body: RelayCreate, request: Request, db: Session = Depends(get_
     return {
         "relay": relay_out(relay, settings),
         "key": key,
-        "compose": compose_snippet(settings, relay.id, relay.name, key),
+        "compose": compose_snippet(settings, relay.id, relay.name, key, body.cache, body.secure_boot),
     }
 
 
@@ -224,7 +246,13 @@ def update_relay(relay_id: str, body: RelayUpdate, request: Request, db: Session
 
 
 @router.post("/{relay_id}/rotate-key")
-def rotate_key(relay_id: str, request: Request, db: Session = Depends(get_db)):
+def rotate_key(
+    relay_id: str,
+    request: Request,
+    cache: bool = False,
+    secure_boot: bool = False,
+    db: Session = Depends(get_db),
+):
     settings: Settings = request.app.state.settings
     relay = db.get(Relay, relay_id)
     if relay is None:
@@ -236,17 +264,28 @@ def rotate_key(relay_id: str, request: Request, db: Session = Depends(get_db)):
     return {
         "relay": relay_out(relay, settings),
         "key": key,
-        "compose": compose_snippet(settings, relay.id, relay.name, key),
+        "compose": compose_snippet(settings, relay.id, relay.name, key, cache, secure_boot),
     }
 
 
 @router.get("/{relay_id}/compose")
-def relay_compose(relay_id: str, request: Request, db: Session = Depends(get_db)):
+def relay_compose(
+    relay_id: str,
+    request: Request,
+    cache: bool = False,
+    secure_boot: bool = False,
+    db: Session = Depends(get_db),
+):
+    """The snippet without the key (the hub only stores its hash). The
+    dashboard fills in a key it was just shown with ``key_placeholder``."""
     settings: Settings = request.app.state.settings
     relay = db.get(Relay, relay_id)
     if relay is None:
         raise HTTPException(404, "relay not found")
-    return {"compose": compose_snippet(settings, relay.id, relay.name, None)}
+    return {
+        "compose": compose_snippet(settings, relay.id, relay.name, None, cache, secure_boot),
+        "key_placeholder": KEY_PLACEHOLDER,
+    }
 
 
 @router.delete("/{relay_id}", status_code=204)

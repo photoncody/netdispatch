@@ -392,6 +392,16 @@
           </label>
         </div>
       </template>
+      <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-200">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" x-model="relayModal.cache" @change="composeOptionsChanged()" class="h-4 w-4 accent-emerald-500">
+          Enable Relay Caching
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" x-model="relayModal.secureBoot" @change="composeOptionsChanged()" class="h-4 w-4 accent-emerald-500">
+          Enable Secure Boot
+        </label>
+      </div>
       <template x-if="relayModal.key">
         <div class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
           <div class="mb-1 font-semibold">Relay key — shown only once</div>
@@ -429,7 +439,7 @@
     <div class="space-y-4 p-5 text-sm">
       <template x-if="cacheModal.relay.cache && !cacheModal.relay.cache.enabled">
         <div class="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-          This relay isn't running with <code class="font-mono">RELAY_CACHE: "true"</code> (or hasn't reported since it started). Assignments are kept: the relay starts downloading once caching is on. See <span class="text-amber-200">Compose snippet</span> for the settings.
+          This relay isn't running with <code class="font-mono">RELAY_CACHE: "true"</code> (or hasn't reported since it started). Assignments are kept: the relay starts downloading once caching is on. Tick <span class="text-amber-200">Enable Relay Caching</span> under <span class="text-amber-200">Compose snippet</span> for the settings.
         </div>
       </template>
       <template x-if="cacheModal.relay.cache && cacheModal.relay.cache.enabled">
@@ -591,7 +601,7 @@ function netdispatch() {
     lastRefresh: null, refreshError: false,
     uploads: [], toasts: [],
     dispatch: { open: false, device: {}, iso_id: '', unattend_id: '', label: '', after_deploy: 'local', script: '' },
-    relayModal: { open: false, mode: 'create', title: '', id: '', name: '', key: '', compose: '' },
+    relayModal: { open: false, mode: 'create', title: '', id: '', name: '', key: '', compose: '', relayId: '', cache: false, secureBoot: false },
     cacheModal: { open: false, relay: {}, items: [], selected: [], dirty: false },
     isoEdit: { open: false, data: {}, initrds: '', files: [] },
     addDevice: { open: false, mac: '', label: '' },
@@ -775,25 +785,52 @@ function netdispatch() {
     },
 
     // ------------------------------------------------------------- relays
-    openAddRelay() { this.relayModal = { open: true, mode: 'create', title: 'Add relay', id: '', name: '', key: '', compose: '' }; },
-    async createRelay() {
+    // The compose checkboxes start where they were left last time, so a run
+    // of similar relays needs no re-ticking (per browser, convenience only).
+    composeDefaults() {
       try {
-        const res = await this.api('POST', '/api/relays', { id: this.relayModal.id.trim(), name: this.relayModal.name.trim() || this.relayModal.id.trim() });
-        this.relayModal = { open: true, mode: 'show', title: `Relay ${res.relay.id} created`, key: res.key, compose: res.compose };
+        const v = JSON.parse(localStorage.getItem('nd-compose-options') || '{}');
+        return { cache: v.cache === true, secureBoot: v.secureBoot === true };
+      } catch (e) { return { cache: false, secureBoot: false }; }
+    },
+    composeQuery() {
+      return `cache=${this.relayModal.cache ? 'true' : 'false'}&secure_boot=${this.relayModal.secureBoot ? 'true' : 'false'}`;
+    },
+    async composeOptionsChanged() {
+      try { localStorage.setItem('nd-compose-options', JSON.stringify({ cache: this.relayModal.cache, secureBoot: this.relayModal.secureBoot })); } catch (e) { /* storage unavailable */ }
+      if (this.relayModal.mode !== 'show' || !this.relayModal.relayId) return;
+      const id = this.relayModal.relayId;
+      try {
+        const res = await this.api('GET', `/api/relays/${encodeURIComponent(id)}/compose?${this.composeQuery()}`);
+        if (this.relayModal.relayId !== id) return; // dialog moved on meanwhile
+        // The hub doesn't keep keys: put back the one shown in this dialog.
+        this.relayModal.compose = this.relayModal.key ? res.compose.split(res.key_placeholder).join(this.relayModal.key) : res.compose;
+      } catch (e) { this.toast(e.message, true); }
+    },
+    openAddRelay() { this.relayModal = { open: true, mode: 'create', title: 'Add relay', id: '', name: '', key: '', compose: '', relayId: '', ...this.composeDefaults() }; },
+    async createRelay() {
+      const m = this.relayModal;
+      try {
+        const res = await this.api('POST', '/api/relays', { id: m.id.trim(), name: m.name.trim() || m.id.trim(), cache: m.cache, secure_boot: m.secureBoot });
+        this.relayModal = { open: true, mode: 'show', title: `Relay ${res.relay.id} created`, key: res.key, compose: res.compose, relayId: res.relay.id, cache: m.cache, secureBoot: m.secureBoot };
         this.refresh(false);
       } catch (e) { this.toast(e.message, true); }
     },
     async showCompose(r) {
+      const opts = this.composeDefaults();
+      if (r.cache && r.cache.enabled) opts.cache = true; // it already runs with caching on
       try {
-        const res = await this.api('GET', `/api/relays/${encodeURIComponent(r.id)}/compose`);
-        this.relayModal = { open: true, mode: 'show', title: `Compose snippet · ${r.id}`, key: '', compose: res.compose };
+        const res = await this.api('GET', `/api/relays/${encodeURIComponent(r.id)}/compose?cache=${opts.cache}&secure_boot=${opts.secureBoot}`);
+        this.relayModal = { open: true, mode: 'show', title: `Compose snippet · ${r.id}`, key: '', compose: res.compose, relayId: r.id, ...opts };
       } catch (e) { this.toast(e.message, true); }
     },
     async rotateKey(r) {
       if (!confirm(`Issue a new key for ${r.id}? The current key stops working immediately.`)) return;
+      const opts = this.composeDefaults();
+      if (r.cache && r.cache.enabled) opts.cache = true;
       try {
-        const res = await this.api('POST', `/api/relays/${encodeURIComponent(r.id)}/rotate-key`);
-        this.relayModal = { open: true, mode: 'show', title: `New key for ${r.id}`, key: res.key, compose: res.compose };
+        const res = await this.api('POST', `/api/relays/${encodeURIComponent(r.id)}/rotate-key?cache=${opts.cache}&secure_boot=${opts.secureBoot}`);
+        this.relayModal = { open: true, mode: 'show', title: `New key for ${r.id}`, key: res.key, compose: res.compose, relayId: r.id, ...opts };
         this.refresh(false);
       } catch (e) { this.toast(e.message, true); }
     },

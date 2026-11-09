@@ -60,6 +60,9 @@ class CacheAssignIn(BaseModel):
 class RelayCreate(BaseModel):
     id: str = Field(pattern=RELAY_ID_PATTERN)
     name: str = Field(min_length=1, max_length=128)
+    # Only shape the returned compose snippet; nothing is stored.
+    cache: bool = False
+    secure_boot: bool = False
 
 
 class RelayUpdate(BaseModel):
