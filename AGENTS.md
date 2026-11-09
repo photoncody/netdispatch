@@ -142,8 +142,8 @@ Verified with this harness:
   - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
   - UEFI `linux` (kernel + initrd) and `sanboot` (HTTP Range) from the relay, with clients fetching only wimboot and `/files/d/*` from the hub;
   - Windows Setup over the relay's SMB share, unattended through to the registered hostname;
-  - the fallback to the hub while an image is re-extracted.
-  - **Not verified:** WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). In this harness WinPE restarts after one to three failed `net use` attempts, before attempt 3 is reached. That also happens on main with the hub's own share down (samba stopped), so it's a pre-existing problem with the share retry loop, not with the relay cache. Until it's understood, an unreachable relay port 445 means a failed Windows install at that site (README says so).
+  - the fallback to the hub while an image is re-extracted;
+  - WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). The relay's port 445 was rejected (`iptables -I INPUT -d 10.77.0.2 -p tcp --dport 445 -j REJECT --reject-with tcp-reset`) and the client was `win-sb`. WinPE tried the relay 3 times, printed diagnostics, switched to the hub's share and started Setup. Before the copy fix (see "`netdispatch.cmd` runs from a copy" under Gotchas), WinPE rebooted before attempt 3.
 
 ## Core invariants (don't break these)
 
@@ -214,7 +214,7 @@ Verified with this harness:
 - **`ManifestCache` memoises** per image on `(updated_at, status, boot_method, cmdline, filename)` with a 5-minute TTL. Heartbeats every 30 s per relay and `/boot` would otherwise walk a Windows tree each time. Call `forget()` when an image is deleted.
 - **New tables, not new columns** (`relay_caches`, `relay_cache_items`), because there are no migrations. Rows are deleted explicitly in `delete_iso` and `delete_relay`.
 - **Downloads are `<file>.nd-<size>-<mtime>.part`, then renamed.** A partial file from an older version of the image never resumes into the new one. lighttpd denies `.part`; Samba vetoes it.
-- **WinPE tries the relay share 3 times, then the hub's** (`winpe.RELAY_TRIES`). `:diag` pings `%ND_HOST%`, whichever host it is currently trying. In the QEMU harness WinPE restarts before attempt 3 (see "Not verified" under the end-to-end test), so don't rely on this switch until that's fixed.
+- **WinPE tries the relay share 3 times, then the hub's** (`winpe.RELAY_TRIES`). `:diag` pings `%ND_HOST%`, whichever host it is currently trying. An unreachable relay share costs each install about a minute (3 attempts) before the switch.
 - **Don't enable the cache on the hub-local relay:** smbd on the host network clashes with the samba container's published port 445.
 
 **Windows / SMB**

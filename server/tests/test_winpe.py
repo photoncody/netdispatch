@@ -8,18 +8,29 @@ from app.models import IsoImage
 from app.winpe import DIAG_FIRST, RUN_COPY, render_netdispatch_cmd
 
 
+def _render(settings, relay_smb_host: str | None = None) -> str:
+    iso = IsoImage(id=7, setup_path="setup.exe")
+    return render_netdispatch_cmd(settings, iso, True, "52:54:00:ab:cd:01", relay_smb_host=relay_smb_host)
+
+
 @pytest.fixture
 def script(settings) -> str:
-    return render_netdispatch_cmd(settings, IsoImage(id=7, setup_path="setup.exe"), True, "52:54:00:ab:cd:01")
+    return _render(settings)
+
+
+@pytest.fixture(params=[None, "10.0.0.9"], ids=["hub-share", "relay-share"])
+def any_script(settings, request) -> str:
+    return _render(settings, request.param)
 
 
 def _lines(script: str) -> list[str]:
     return script.split("\r\n")
 
 
-def test_script_reruns_itself_from_a_ram_disk_copy(script):
+def test_script_reruns_itself_from_a_ram_disk_copy(any_script):
     # WinPE reads the wimboot-injected file back wrong after a few seconds, which
     # ended the script (and so rebooted WinPE) in the middle of the retry loop.
+    script = any_script
     lines = _lines(script)
     assert RUN_COPY == "X:\\netdispatch.cmd"
     assert lines[:4] == [
@@ -57,7 +68,14 @@ def test_diagnostics_only_use_tools_in_setup_boot_wim(script):
     assert diag.index(":diagping") < diag.index("ping -n 1 -w 2000 10.0.0.5")
 
 
-def test_every_jump_target_exists(script):
+def test_relay_share_diagnostics_ping_the_current_host(settings):
+    script = _render(settings, "10.0.0.9")
+    assert "findstr" not in script
+    assert "ping -n 1 -w 2000 %ND_HOST%" in _lines(script)
+
+
+def test_every_jump_target_exists(any_script):
+    script = any_script
     lines = _lines(script)
     labels = {line[1:].lower() for line in lines if line.startswith(":")}
     targets = re.findall(r"\b(?:goto|call) :?([A-Za-z]\w*)", script)

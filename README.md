@@ -355,7 +355,7 @@ How it behaves:
 - **Machines always get an image.** Until the relay has a complete, current copy of an image, machines on that site boot it from the hub as before. The same happens if the relay is offline or its file server is down.
 - **Updates are automatic.** Re-extract or replace an image on the hub, and relays fetch only the files that changed. Meanwhile machines use the hub. Untick an image, or delete it on the hub, and relays delete their copy.
 - **What's stored** depends on the boot method: Windows Setup, WinPE and `linux` images keep their extracted files; `sanboot` and `memdisk` images keep the ISO. A `linux` image whose command line uses `{iso_url}` keeps both. That's about the ISO's size per image: a Windows ISO needs about 6 GB.
-- **Windows Setup** maps the relay's install share. If the relay reports its share down, WinPE uses the hub's share instead. The script also switches to the hub's share after 3 failed attempts, but see the note on port 445 below.
+- **Windows Setup** maps the relay's install share. If the relay reports its share down, WinPE uses the hub's share instead. If the relay's share doesn't answer, WinPE also switches to the hub's share after 3 failed attempts.
 - Kernels, initrds and ISOs come from the relay over plain HTTP, and Windows Setup uses SMB. The unattend file and the share password still come from the hub, through each deployment's one-time link.
 
 Caching settings on the relay:
@@ -372,7 +372,7 @@ Caching settings on the relay:
 | `CACHE_SYNC_WINDOW` | any time | downloads should only start at night, e.g. `22:00-06:00`. A download that is running at the end of the window finishes, and the next one waits. Set `TZ` (e.g. `Europe/Berlin`) for local time. |
 
 Notes:
-- Machines on that segment need TCP 8080 (or your `CACHE_HTTP_PORT`) and TCP 445 to the relay host. Nothing else on the relay host may use port 445. **Check that 445 is open** before installing Windows there: if the relay's share runs but machines can't reach it, WinPE may restart before it gets to try the hub's share, and the install doesn't start. If you can't open it, set `CACHE_SMB: "false"`.
+- Machines on that segment need TCP 8080 (or your `CACHE_HTTP_PORT`) and TCP 445 to the relay host. Nothing else on the relay host may use port 445. If the relay's share runs but machines can't reach it on 445, each Windows install loses about a minute to 3 failed attempts, then reads the install files from the hub. If you can't open the port, set `CACHE_SMB: "false"` so they go to the hub straight away.
 - Don't turn caching on for the relay that runs on the hub host (`--profile local-relay`). Its port 445 clashes with the hub's own share, and there's no link to save.
 - The relay downloads from `CENTRAL_SERVER_URL`, the same address it sends heartbeats to.
 
