@@ -173,6 +173,7 @@ Verified with this harness:
 - **wimboot injects files into `X:\Windows\System32`.**
   - `winpeshl.ini` uses the `[LaunchApps]` / `"netdispatch.cmd"` format.
   - Initrd naming follows the canonical wimboot form: `initrd <url> <name>`.
+- **`netdispatch.cmd` is winpeshl's only app.** Shift+F10 doesn't work there, and when the script ends WinPE reboots. So the share retry loop prints `ipconfig`/`ping` diagnostics (`:diag`) and offers a prompt through `choice /c RC /t 10`. If `choice` is missing or has no console it returns 255 or more, and the loop falls back to a `ping` wait.
 - **Batch escaping in `netdispatch.cmd`:** `%` becomes `%%`, and double quotes are rejected in `SMB_PASSWORD`. `SMB_USERNAME` is restricted to `[A-Za-z0-9._-]`.
 - **WinPE only has inbox drivers.** Test VMs must use **e1000e + NVMe/AHCI**: virtio-net means no network in WinPE, and virtio-blk means Setup sees no disk.
 - **7-Zip:** try `-tudf` first. A Windows ISO's ISO9660 layer only contains `README.TXT`, so `_usable_tree()` requires more than one file. Linux hybrid ISOs fall back to `-tiso`. Expect a harmless `[BOOT]` directory.

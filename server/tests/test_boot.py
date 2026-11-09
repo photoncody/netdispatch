@@ -83,6 +83,11 @@ def test_full_deploy_cycle_windows(client, admin, windows_iso):
     assert f"\\\\10.0.0.5\\netdispatch\\{windows_iso}" in cmd
     assert '"smb-pw%%1"' in cmd  # % escaped for cmd.exe
     assert "/unattend:X:\\Windows\\System32\\autounattend.xml" in cmd
+    # a failed share connection prints network diagnostics and offers a prompt
+    assert "call :diag" in cmd and "\r\n:diag\r\n" in cmd and "ipconfig" in cmd
+    assert "ping -n 1 -w 2000 10.0.0.5" in cmd
+    assert "choice /c RC /t 10 /d R" in cmd and "if errorlevel 2 goto shell" in cmd
+    assert "\n" not in cmd.replace("\r\n", "")  # CRLF line endings only
     assert client.get(f"/files/d/{token}/winpeshl.ini").text.startswith("[LaunchApps]")
     assert client.get("/files/d/wrongtokenwrongtoken123/autounattend.xml").status_code == 404
 
