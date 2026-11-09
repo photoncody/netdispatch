@@ -13,6 +13,9 @@ from .models import IsoImage
 
 WINPESHL_INI = '[LaunchApps]\r\n"netdispatch.cmd"\r\n'
 
+# netdispatch.cmd copies itself here and runs the copy (see render_netdispatch_cmd).
+RUN_COPY = "X:\\netdispatch.cmd"
+
 # Failed share connections before the first network diagnostics are printed
 # (DHCP can still be settling on the first attempts); repeated every
 # DIAG_EVERY attempts after that.
@@ -32,19 +35,24 @@ def _batch_literal(value: str) -> str:
 def _diagnostics(host: str) -> list[str]:
     """``:diag`` subroutine: show what WinPE's network looks like.
 
-    The hints match English ``ipconfig`` output; on other WinPE languages they
-    may be wrong, but the raw lines printed above them still tell the story.
+    Windows Setup's boot.wim has ``find`` but no ``findstr``, ``choice`` or
+    ``timeout``. So the raw ``ipconfig`` and ``ping`` output is printed, and the
+    hints use only ``find`` (they're skipped where even that is missing). They
+    match English ``ipconfig`` output; on other WinPE languages they may be
+    wrong, but the raw output above them still tells the story.
     """
     return [
         ":diag",
         "echo.",
         "echo netdispatch: ---- network diagnostics ----",
-        'ipconfig | findstr /i /c:"adapter" /c:"IPv4" /c:"Media State"',
-        'ipconfig | findstr /i /c:"adapter" >nul || echo netdispatch: WinPE sees NO network adapter. It has no driver for this'
+        "ipconfig",
+        "if not exist %SystemRoot%\\System32\\find.exe goto diagping",
+        'ipconfig | find /i "adapter" >nul || echo netdispatch: WinPE sees NO network adapter. It has no driver for this'
         " network card: on VMs use e1000e instead of VirtIO, otherwise add the driver to boot.wim.",
-        'ipconfig | findstr /r /c:"^ *IPv4 Address" >nul || echo netdispatch: no IPv4 address from DHCP. Check the cable,'
+        'ipconfig | find "IPv4 Address" >nul || echo netdispatch: no IPv4 address from DHCP. Check the cable,'
         " VLAN and DHCP server.",
-        f"ping -n 1 -w 2000 {host} | findstr /i /c:\"{host}\" /c:\"TTL=\" /c:\"timed out\" /c:\"unreachable\"",
+        ":diagping",
+        f"ping -n 1 -w 2000 {host}",
         f"echo netdispatch: the share needs TCP 445 from this machine to {host}.",
         "echo netdispatch: -----------------------------",
         "echo.",
@@ -68,6 +76,18 @@ def render_netdispatch_cmd(
     unattend = "X:\\Windows\\System32\\autounattend.xml"
     lines = [
         "@echo off",
+        # cmd.exe re-reads a batch file from disk before every line. Read back from
+        # the wimboot-injected copy in X:\Windows\System32, this script goes wrong a
+        # few seconds into WinPE: a line comes back cut short, then the file ends
+        # early. It shows up when a long-running command such as wpeinit, net use or
+        # ping returns. The script then ends, and winpeshl, whose only app it is,
+        # reboots WinPE, so a share that was down never got past the first retries.
+        # Run from a copy on the RAM disk instead. The copy is made while the first
+        # lines still read back correctly, and a batch file started without CALL
+        # replaces this one for good. If the copy fails, carry on from here.
+        f'if /i not "%~f0"=="{RUN_COPY}" (',
+        f'  copy /y "%~f0" {RUN_COPY} >nul && {RUN_COPY}',
+        ")",
         "title netdispatch - Windows Setup",
         "echo.",
         f"echo netdispatch: preparing Windows Setup for {mac}",
@@ -104,6 +124,7 @@ def render_netdispatch_cmd(
         "if errorlevel 2 goto shell",
         "if errorlevel 1 goto connect",
         ":wait",
+        "echo netdispatch: retrying in 10 seconds",
         "ping -n 11 127.0.0.1 >nul",
         "goto connect",
         ":shell",

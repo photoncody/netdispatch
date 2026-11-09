@@ -131,6 +131,7 @@ Verified with this harness:
 - UEFI native PXE and BIOS (iPXE ROM chainload) reach the hold loop.
 - Alpine boots on both.
 - Windows 11 installs unattended to the desktop from `examples/unattend/win11-uefi-basic.xml`.
+- With the install share down (samba stopped), WinPE keeps retrying with diagnostics: 47 attempts over 12 minutes, no reboot. It starts Setup on the first attempt after the share is back.
 - With Secure Boot enforced (`uefi-sb`, `win-sb`, relay `SECURE_BOOT=true`):
   - the hold loop and local boot (the firmware moves on to the next entry);
   - the DHCP fallback when `autoexec.ipxe` is missing;
@@ -223,6 +224,11 @@ Verified with this harness:
   - `winpeshl.ini` uses the `[LaunchApps]` / `"netdispatch.cmd"` format.
   - Initrd naming follows the canonical wimboot form: `initrd <url> <name>`.
 - **`netdispatch.cmd` is winpeshl's only app.** Shift+F10 doesn't work there, and when the script ends WinPE reboots. So the share retry loop prints `ipconfig`/`ping` diagnostics (`:diag`) and offers a prompt through `choice /c RC /t 10`. If `choice` is missing or has no console it returns 255 or more, and the loop falls back to a `ping` wait.
+- **`netdispatch.cmd` runs from a copy, `X:\netdispatch.cmd`.**
+  - cmd.exe re-reads a batch file from disk before every line. Read from the wimboot-injected file in `X:\Windows\System32`, the script went wrong a few seconds into WinPE. A line came back cut short, then the file ended early, usually just after a long command (`wpeinit`, `net use`, `ping`) returned. The script stopped and WinPE rebooted, so with the share down it never got past attempt 1 or 2.
+  - `type` showed the file intact afterwards, so only cmd's line-by-line reads were affected. The copy, made by the script's first lines and started without `call`, fixed it in the QEMU harness. Keep those lines first.
+  - Traced in the harness with a second `[LaunchApps]` entry (it only runs when the first app exits) and markers written to `X:\`. Keep that in mind for anything else long-running that WinPE reads from wimboot's injected files.
+- **Windows Setup's boot.wim lacks `findstr`, `choice`, `timeout`, `tasklist` and `fc`.** It has `find`, `ping`, `ipconfig`, `net`, `reg`, `more`, `xcopy`, `robocopy` and `netsh`. A missing command fails with errorlevel 9009, which also triggers a `||` fallback, so `:diag` prints raw `ipconfig`/`ping` output and only uses `find` for its hints.
 - **Answer-file scripts look for the answer file themselves.** For example, the schneegans.de generator's `pe.cmd` checks `HKLM\System\Setup!UnattendFile` and `<drive>:\autounattend.xml`, never `X:\Windows\System32` where wimboot puts it. So `netdispatch.cmd` sets that registry value and copies the file to `X:\autounattend.xml` before it starts Setup.
 - **Batch escaping in `netdispatch.cmd`:** `%` becomes `%%`, and double quotes are rejected in `SMB_PASSWORD`. `SMB_USERNAME` is restricted to `[A-Za-z0-9._-]`.
 - **WinPE only has inbox drivers.** Test VMs must use **e1000e + NVMe/AHCI**: virtio-net means no network in WinPE, and virtio-blk means Setup sees no disk.
