@@ -80,8 +80,10 @@ if [ "$RELAY_CACHE" = "true" ]; then
   # relay stores everything in lower case, so CACHE_DIR must be lower case too.
   echo "$CACHE_DIR" | grep -Eq '^/[a-z0-9._/-]+$' \
     || die "CACHE_DIR must be an absolute path of lowercase letters, digits, '.', '_', '-' (got '$CACHE_DIR')"
-  echo "$CACHE_HTTP_PORT" | grep -Eq '^[0-9]{1,5}$' && [ "$CACHE_HTTP_PORT" -ge 1 ] && [ "$CACHE_HTTP_PORT" -le 65535 ] \
-    || die "CACHE_HTTP_PORT must be a TCP port number (got '$CACHE_HTTP_PORT')"
+  if ! echo "$CACHE_HTTP_PORT" | grep -Eq '^[0-9]{1,5}$' \
+     || [ "$CACHE_HTTP_PORT" -lt 1 ] || [ "$CACHE_HTTP_PORT" -gt 65535 ]; then
+    die "CACHE_HTTP_PORT must be a TCP port number (got '$CACHE_HTTP_PORT')"
+  fi
   [ -z "$CACHE_RATE_LIMIT" ] || echo "$CACHE_RATE_LIMIT" | grep -Eq '^[0-9]+[KkMmGg]?$' \
     || die "CACHE_RATE_LIMIT must look like 500K, 20M or 1G (got '$CACHE_RATE_LIMIT')"
   [ -z "$CACHE_SYNC_WINDOW" ] || echo "$CACHE_SYNC_WINDOW" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$' \
