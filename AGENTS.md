@@ -131,6 +131,7 @@ Verified with this harness:
 - UEFI native PXE and BIOS (iPXE ROM chainload) reach the hold loop.
 - Alpine boots on both.
 - Windows 11 installs unattended to the desktop from `examples/unattend/win11-uefi-basic.xml`.
+- With the install share down (samba stopped), WinPE keeps retrying with diagnostics: 47 attempts over 12 minutes, no reboot. It starts Setup on the first attempt after the share is back.
 - With Secure Boot enforced (`uefi-sb`, `win-sb`, relay `SECURE_BOOT=true`):
   - the hold loop and local boot (the firmware moves on to the next entry);
   - the DHCP fallback when `autoexec.ipxe` is missing;
@@ -141,8 +142,8 @@ Verified with this harness:
   - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
   - UEFI `linux` (kernel + initrd) and `sanboot` (HTTP Range) from the relay, with clients fetching only wimboot and `/files/d/*` from the hub;
   - Windows Setup over the relay's SMB share, unattended through to the registered hostname;
-  - the fallback to the hub while an image is re-extracted.
-  - **Not verified:** WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). In this harness WinPE restarts after one to three failed `net use` attempts, before attempt 3 is reached. That also happens on main with the hub's own share down (samba stopped), so it's a pre-existing problem with the share retry loop, not with the relay cache. Until it's understood, an unreachable relay port 445 means a failed Windows install at that site (README says so).
+  - the fallback to the hub while an image is re-extracted;
+  - WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). The relay's port 445 was rejected (`iptables -I INPUT -d 10.77.0.2 -p tcp --dport 445 -j REJECT --reject-with tcp-reset`) and the client was `win-sb`. WinPE tried the relay 3 times, printed diagnostics, switched to the hub's share and started Setup. Before the copy fix (see "`netdispatch.cmd` runs from a copy" under Gotchas), WinPE rebooted before attempt 3.
 
 ## Core invariants (don't break these)
 
@@ -213,7 +214,7 @@ Verified with this harness:
 - **`ManifestCache` memoises** per image on `(updated_at, status, boot_method, cmdline, filename)` with a 5-minute TTL. Heartbeats every 30 s per relay and `/boot` would otherwise walk a Windows tree each time. Call `forget()` when an image is deleted.
 - **New tables, not new columns** (`relay_caches`, `relay_cache_items`), because there are no migrations. Rows are deleted explicitly in `delete_iso` and `delete_relay`.
 - **Downloads are `<file>.nd-<size>-<mtime>.part`, then renamed.** A partial file from an older version of the image never resumes into the new one. lighttpd denies `.part`; Samba vetoes it.
-- **WinPE tries the relay share 3 times, then the hub's** (`winpe.RELAY_TRIES`). `:diag` pings `%ND_HOST%`, whichever host it is currently trying. In the QEMU harness WinPE restarts before attempt 3 (see "Not verified" under the end-to-end test), so don't rely on this switch until that's fixed.
+- **WinPE tries the relay share 3 times, then the hub's** (`winpe.RELAY_TRIES`). `:diag` pings `%ND_HOST%`, whichever host it is currently trying. An unreachable relay share costs each install about a minute (3 attempts) before the switch.
 - **Don't enable the cache on the hub-local relay:** smbd on the host network clashes with the samba container's published port 445.
 
 **Windows / SMB**
@@ -223,6 +224,11 @@ Verified with this harness:
   - `winpeshl.ini` uses the `[LaunchApps]` / `"netdispatch.cmd"` format.
   - Initrd naming follows the canonical wimboot form: `initrd <url> <name>`.
 - **`netdispatch.cmd` is winpeshl's only app.** Shift+F10 doesn't work there, and when the script ends WinPE reboots. So the share retry loop prints `ipconfig`/`ping` diagnostics (`:diag`) and offers a prompt through `choice /c RC /t 10`. If `choice` is missing or has no console it returns 255 or more, and the loop falls back to a `ping` wait.
+- **`netdispatch.cmd` runs from a copy, `X:\netdispatch.cmd`.**
+  - cmd.exe re-reads a batch file from disk before every line. Read from the wimboot-injected file in `X:\Windows\System32`, the script went wrong a few seconds into WinPE. A line came back cut short, then the file ended early, usually just after a long command (`wpeinit`, `net use`, `ping`) returned. The script stopped and WinPE rebooted, so with the share down it never got past attempt 1 or 2.
+  - `type` showed the file intact afterwards, so only cmd's line-by-line reads were affected. The copy, made by the script's first lines and started without `call`, fixed it in the QEMU harness. Keep those lines first.
+  - Traced in the harness with a second `[LaunchApps]` entry (it only runs when the first app exits) and markers written to `X:\`. Keep that in mind for anything else long-running that WinPE reads from wimboot's injected files.
+- **Windows Setup's boot.wim lacks `findstr`, `choice`, `timeout`, `tasklist` and `fc`.** It has `find`, `ping`, `ipconfig`, `net`, `reg`, `more`, `xcopy`, `robocopy` and `netsh`. A missing command fails with errorlevel 9009, which also triggers a `||` fallback, so `:diag` prints raw `ipconfig`/`ping` output and only uses `find` for its hints.
 - **Answer-file scripts look for the answer file themselves.** For example, the schneegans.de generator's `pe.cmd` checks `HKLM\System\Setup!UnattendFile` and `<drive>:\autounattend.xml`, never `X:\Windows\System32` where wimboot puts it. So `netdispatch.cmd` sets that registry value and copies the file to `X:\autounattend.xml` before it starts Setup.
 - **Batch escaping in `netdispatch.cmd`:** `%` becomes `%%`, and double quotes are rejected in `SMB_PASSWORD`. `SMB_USERNAME` is restricted to `[A-Za-z0-9._-]`.
 - **WinPE only has inbox drivers.** Test VMs must use **e1000e + NVMe/AHCI**: virtio-net means no network in WinPE, and virtio-blk means Setup sees no disk.
