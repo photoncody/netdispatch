@@ -140,6 +140,54 @@ def _shown(src: str) -> str:
     return unquote(src.split("/", 5)[-1])
 
 
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _walk_tree(root: Path) -> tuple[list[tuple[str, Path]], str | None]:
+    """Every path the hub's ``resolve_ci()`` serves below ``root``, as
+    ``(relative path, file)`` pairs, or the reason a relay can't copy them.
+
+    Symlinks inside the image are followed like the hub follows them, so a
+    path through ``boot -> actual`` is copied under ``boot/`` too. Links that
+    leave the image are skipped: the hub refuses those paths as well. A
+    directory link back to one of its own parents (``debian -> .``) gives the
+    hub endless valid paths that no copy can hold, so the image isn't cached.
+    """
+    real_root = root.resolve()
+    found: list[tuple[str, Path]] = []
+    for dirpath, dirs, names in os.walk(root, followlinks=True):
+        here = Path(dirpath)
+        rel_here = here.relative_to(root)
+        # Real directories on the way down to here: following a link to one
+        # of them would never end.
+        chain = {real_root}
+        for i in range(1, len(rel_here.parts) + 1):
+            chain.add(Path(root, *rel_here.parts[:i]).resolve())
+        for name in list(dirs):
+            sub = here / name
+            if not sub.is_symlink():
+                continue
+            target = sub.resolve()
+            if not _inside(target, real_root):
+                dirs.remove(name)
+            elif target in chain:
+                rel = sub.relative_to(root).as_posix()
+                return [], f"the directory link {rel} points back to a directory that contains it"
+        for name in names:
+            path = here / name
+            if path.is_symlink():
+                target = path.resolve()
+                if not _inside(target, real_root) or not target.is_file():
+                    continue
+            found.append((path.relative_to(root).as_posix(), path))
+    return found, None
+
+
 def build_manifest(settings: Settings, iso: IsoImage) -> IsoManifest:
     """List the files a relay needs to serve ``iso`` from its cache.
 
@@ -151,17 +199,18 @@ def build_manifest(settings: Settings, iso: IsoImage) -> IsoManifest:
     if _needs_tree(iso):
         root = settings.extracted_dir / str(iso.id)
         if root.is_dir():
-            for dirpath, _dirs, names in os.walk(root):
-                for name in names:
-                    path = Path(dirpath, name)
-                    rel = path.relative_to(root).as_posix()
-                    entry = _file_entry(
-                        f"tree/{iso.id}/{ascii_lower(rel)}",
-                        f"/files/iso/{iso.id}/tree/{quote(rel, safe='/')}",
-                        path,
-                    )
-                    if entry:
-                        files.append(entry)
+            tree, problem = _walk_tree(root)
+            if problem:
+                log.warning("image %s can't be cached on relays: %s", iso.id, problem)
+                return IsoManifest(iso.id, "", [], 0, problem)
+            for rel, path in tree:
+                entry = _file_entry(
+                    f"tree/{iso.id}/{ascii_lower(rel)}",
+                    f"/files/iso/{iso.id}/tree/{quote(rel, safe='/')}",
+                    path,
+                )
+                if entry:
+                    files.append(entry)
     if _needs_raw(iso):
         entry = _file_entry(
             f"raw/{iso.id}/{ascii_lower(iso.filename)}",

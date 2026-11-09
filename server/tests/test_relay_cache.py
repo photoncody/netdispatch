@@ -160,6 +160,53 @@ def test_case_colliding_image_is_not_cacheable(paths, clash, client, admin, app,
     assert CACHE_URL not in script and "/files/iso/" in script
 
 
+def _linux_iso(app, settings, kernel="boot/vmlinuz"):
+    return _add_iso(
+        app, settings, name="Linked", filename="linked.iso", boot_method="linux",
+        kernel_path=kernel, initrd_paths_json='["boot/initrd"]',
+    )
+
+
+def test_symlinked_directories_are_copied_like_the_hub_serves_them(client, admin, app, settings, relay_key):
+    iso = _linux_iso(app, settings)
+    root = settings.extracted_dir / str(iso)
+    make_tree(root, ["actual/vmlinuz", "actual/initrd"])
+    (root / "boot").symlink_to("actual")
+    (root / "Kernel").symlink_to("actual/vmlinuz")
+    outside = settings.data_dir / "outside"
+    make_tree(outside, ["secret"])
+    (root / "escape").symlink_to(outside)  # the hub refuses these paths
+    (root / "escape-file").symlink_to(outside / "secret")
+    (root / "dangling").symlink_to("missing")
+    _assign(admin, iso)
+    [entry] = _manifest(client, relay_key).json()["isos"]
+    files = {f["dest"]: f["src"] for f in entry["files"]}
+    assert sorted(files) == [
+        f"tree/{iso}/actual/initrd", f"tree/{iso}/actual/vmlinuz",
+        f"tree/{iso}/boot/initrd", f"tree/{iso}/boot/vmlinuz", f"tree/{iso}/kernel",
+    ]
+    # every listed source is a path the hub really serves
+    for src in files.values():
+        assert client.get(src).content == b"x", src
+
+    _report_ready(client, relay_key, iso, smb_ok=False)
+    script = _deploy(client, admin, iso)
+    assert f"kernel {CACHE_URL}/tree/{iso}/boot/vmlinuz" in script
+
+
+@pytest.mark.parametrize("link, target", [("debian", "."), ("a/b/up", "..")])
+def test_looping_directory_link_is_not_cacheable(link, target, client, admin, app, settings, relay_key):
+    iso = _linux_iso(app, settings)
+    root = settings.extracted_dir / str(iso)
+    make_tree(root, ["boot/vmlinuz", "boot/initrd", "a/b/file"])
+    (root / link).symlink_to(target)
+    _assign(admin, iso)
+    [entry] = _manifest(client, relay_key).json()["isos"]
+    assert "files" not in entry and f"the directory link {link} points back" in entry["error"]
+    script = _deploy(client, admin, iso)
+    assert CACHE_URL not in script
+
+
 def test_manifest_etag_tracks_content(client, admin, app, settings, relay_key, windows_iso):
     _assign(admin, windows_iso)
     first = _manifest(client, relay_key).json()
