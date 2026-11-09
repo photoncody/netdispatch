@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import Settings
 from ..database import get_db
 from ..models import (
+    BOOT_LINUX,
     ISO_READY,
     STATE_BOOTING,
     STATE_DEPLOYING,
@@ -22,7 +23,14 @@ from ..models import (
     UnattendConfig,
     utcnow,
 )
-from ..pxe_engine import normalize_mac, render_local, render_payload, render_wait
+from ..pxe_engine import (
+    https_fetch_warning,
+    normalize_mac,
+    render_cmdline,
+    render_local,
+    render_payload,
+    render_wait,
+)
 from ..schemas import DeployIn, DeviceCreate, DeviceUpdate, device_out
 from .boot import context_for
 
@@ -117,7 +125,13 @@ def deploy(device_id: int, body: DeployIn, request: Request, db: Session = Depen
     device.last_event = f"dispatched {iso.name} ({_user(request)})"
     db.commit()
     db.refresh(device)
-    return device_out(device, settings, _relays(db))
+    out = device_out(device, settings, _relays(db))
+    if iso.boot_method == BOOT_LINUX:
+        relay = db.get(Relay, device.relay_id) if device.relay_id else None
+        warning = https_fetch_warning(render_cmdline(context_for(device, relay, settings), iso))
+        if warning:
+            out["warning"] = warning
+    return out
 
 
 @router.post("/{device_id}/reset")

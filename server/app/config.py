@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # PUBLIC_URL. Point this at a plain-HTTP LAN address if your proxy uses a
     # certificate iPXE does not trust, or to keep multi-GB WIM transfers off TLS.
     boot_base_url: str = ""
+    # Base URL that Linux initramfs downloads use: the {iso_url} and {files_url}
+    # kernel cmdline placeholders. Defaults to the boot URL. casper (Ubuntu,
+    # Mint) and Debian live-boot fetch with busybox wget, which has no TLS, so
+    # point this at a plain-HTTP address of the hub when the boot URL is https.
+    # Only /files/iso/* (already unauthenticated) is reached through it.
+    linux_fetch_url: str = ""
 
     # --- Storage --------------------------------------------------------
     data_dir: Path = Path("/data")
@@ -77,7 +83,7 @@ class Settings(BaseSettings):
     wimboot_path: Path = Path("/opt/netdispatch/wimboot")
     memdisk_path: Path = Path("/opt/netdispatch/memdisk")
 
-    @field_validator("public_url", "boot_base_url")
+    @field_validator("public_url", "boot_base_url", "linux_fetch_url")
     @classmethod
     def _strip_slash(cls, v: str) -> str:
         return v.strip().rstrip("/")
@@ -110,6 +116,10 @@ class Settings(BaseSettings):
     @property
     def boot_url(self) -> str:
         return self.boot_base_url or self.public_url
+
+    @property
+    def effective_linux_fetch_url(self) -> str:
+        return self.linux_fetch_url or self.boot_url
 
     @property
     def isos_dir(self) -> Path:

@@ -155,6 +155,14 @@ Booting machines run iPXE, which downloads everything from `BOOT_BASE_URL`. It d
 
 Relays use the same address as their `CENTRAL_SERVER_URL`. Generated relay snippets fill it in for you.
 
+#### Linux live images and HTTPS
+
+Ubuntu, Mint and other casper-based images, and Debian live images, download their root file system *after* the kernel starts, from inside the initramfs. They use busybox `wget`, which can't do HTTPS: the boot stops with `wget: can't execute 'openssl'` and *Unable to find a live file system on the network*. iPXE itself loads the kernel and initrd over HTTPS without trouble, so only this last step fails.
+
+If your boot URL is `https://`, set `LINUX_FETCH_URL` to a plain-HTTP address of the hub, for example `LINUX_FETCH_URL=http://10.0.0.5:8000`. It only replaces the `{iso_url}` and `{files_url}` placeholders on the kernel command line, which point at image files under `/files/iso/`. Those are open without sign-in anyway, so plain HTTP exposes nothing new. iPXE's own downloads, and the per-deployment links that carry secrets, keep using the boot URL.
+
+The hub's own port (`:8000`) is the simplest plain-HTTP address. To go through your reverse proxy instead, give it a plain-HTTP route for `/files/iso/` that doesn't redirect to HTTPS (see the Traefik example below). The dashboard warns when you dispatch a casper or live-boot image whose download address is still `https://`.
+
 ## Put the hub behind a reverse proxy
 
 You can run the dashboard behind your existing reverse proxy:
@@ -163,6 +171,7 @@ You can run the dashboard behind your existing reverse proxy:
 - Set `FORWARDED_ALLOW_IPS` to your proxy's IP address (or the CIDR of its Docker network) so client IPs and HTTPS are detected correctly.
 - **Allow large uploads.** Remove the proxy's request-size limit and raise its timeouts. ISOs are several GB.
 - Booting machines may keep using the hub's direct LAN address (`BOOT_BASE_URL`). They don't need to go through the proxy.
+- If machines boot through the proxy over HTTPS, Linux live images need a plain-HTTP route for `/files/iso/`. See [Linux live images and HTTPS](#linux-live-images-and-https).
 
 <details>
 <summary>nginx</summary>
@@ -212,6 +221,15 @@ labels:
   - traefik.http.services.netdispatch.loadbalancer.server.port=8000
 ```
 Also set `FORWARDED_ALLOW_IPS` to the CIDR of Traefik's Docker network.
+
+For [Linux live images over HTTPS](#linux-live-images-and-https), add a router on the plain-HTTP `web` entrypoint that only matches image files, and set `LINUX_FETCH_URL=http://pxe.example.com`:
+
+```yaml
+  - traefik.http.routers.netdispatch-fetch.rule=Host(`pxe.example.com`) && PathPrefix(`/files/iso/`)
+  - traefik.http.routers.netdispatch-fetch.entrypoints=web
+  - traefik.http.routers.netdispatch-fetch.service=netdispatch
+```
+Don't attach an HTTPS-redirect middleware to this router. If the `web` entrypoint redirects everything at the entrypoint level (`entrypoints.web.http.redirections`), that redirect outranks routers by default. Lower its priority, for example `--entrypoints.web.http.redirections.entrypoint.priority=1`, so this router wins for `/files/iso/` and everything else still redirects.
 </details>
 
 ## Sign-in: SSO and the local admin
@@ -319,8 +337,8 @@ Use **Edit profile** to adjust how an image boots:
 
   | Placeholder | Becomes |
   |---|---|
-  | `{iso_url}` | download address of the raw ISO |
-  | `{files_url}` | address of the extracted files |
+  | `{iso_url}` | download address of the raw ISO (uses `LINUX_FETCH_URL` when set) |
+  | `{files_url}` | address of the extracted files (uses `LINUX_FETCH_URL` when set) |
   | `{base_url}` | the hub's boot URL |
   | `{mac}`, `{hostname}`, `{ip}`, `{relay}` | values of the machine being booted |
 
@@ -443,6 +461,7 @@ docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exch
 | WinPE keeps printing *cannot reach \\\\…\\netdispatch\\N* | TCP 445 is blocked, `SMB_HOST` is wrong, `SMB_PASSWORD` is empty, or WinPE has no driver for the network card (see [Drivers in WinPE](#drivers-in-winpe)). |
 | Windows Setup shows no disks | WinPE has no storage driver: Intel VMD/RST, VirtIO or RAID. See [Drivers in WinPE](#drivers-in-winpe). |
 | Setup still asks questions | No template was selected when dispatching, or the template lacks those settings. Check **Preview rendered**. For multi-edition media, set the image index or a product key in the template. |
+| Ubuntu/Mint or Debian live prints `wget: can't execute 'openssl'`, then *Unable to find a live file system on the network* | The initramfs can't download over HTTPS. Set `LINUX_FETCH_URL` to a plain-HTTP address of the hub. See [Linux live images and HTTPS](#linux-live-images-and-https). |
 | Linux kernel starts, then can't find its root file system | Adjust the command line in **Edit profile**. For Ubuntu, give the machine more RAM than the ISO size. |
 | Image status is **error** | Read the message under the status: usually disk space or an unreadable ISO. Fix it, then click **Re-extract ISO**. |
 | Large uploads fail partway | Your reverse proxy limits request size or times out. See [Put the hub behind a reverse proxy](#put-the-hub-behind-a-reverse-proxy), or copy the ISO into `data/isos/` and **Rescan**. |

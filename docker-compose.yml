@@ -43,6 +43,12 @@ services:
       # certificate, or to keep multi-GB transfers off TLS. Relays should use
       # the same value for CENTRAL_SERVER_URL.
       BOOT_BASE_URL: ""
+      # Plain-HTTP address of the hub for Linux live images that download their
+      # root file system from the initramfs ({iso_url} / {files_url} on the
+      # kernel command line). casper (Ubuntu, Mint) and Debian live-boot use
+      # busybox wget, which has no TLS, so set this when the boot URL is https.
+      # Only /files/iso/* is reached through it. Empty = the boot URL.
+      # LINUX_FETCH_URL: http://10.0.0.5:8000
       # Reverse proxies allowed to set X-Forwarded-For / -Proto
       # (comma-separated IPs/CIDRs, or * to trust any).
       FORWARDED_ALLOW_IPS: 127.0.0.1
