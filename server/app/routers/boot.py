@@ -49,6 +49,7 @@ def _clean_ip(value: str) -> str | None:
 def context_for(device: Device, relay: Relay | None, settings: Settings) -> BootContext:
     return BootContext(
         base_url=settings.boot_url,
+        fetch_base_url=settings.effective_linux_fetch_url,
         mac=device.mac,
         ip=device.ip,
         relay_id=device.relay_id,

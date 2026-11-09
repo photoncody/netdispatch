@@ -135,6 +135,8 @@ Verified with this harness:
    - Without `--replace`, every poll nests a script and iPXE eventually runs out of memory.
    - `--replace` keeps the call stack, so the replaced script's `exit` still returns to the relay script.
 4. **Absolute URLs come only from `Settings.boot_url`** (`BOOT_BASE_URL`, falling back to `PUBLIC_URL`). Never use the request `Host` or `X-Forwarded-Host`. The OIDC redirect URI is always `PUBLIC_URL/auth/oidc/callback`.
+   - The one exception is the `{iso_url}` / `{files_url}` cmdline placeholders. They use `Settings.effective_linux_fetch_url` (`LINUX_FETCH_URL`, falling back to the boot URL) through `BootContext.fetch_url`, because casper and live-boot download with busybox `wget`, which has no TLS.
+   - iPXE's own `kernel`/`initrd` lines and every `/files/d/{token}` URL stay on `boot_url`, so secrets never go over the plain-HTTP fetch URL.
 5. **Every variable string echoed into an iPXE script goes through `ipxe_text()`.**
    - It strips `$ { } & | # " '` and similar characters. Labels and relay names are user-controlled, and `${…}` would be expanded and `&&`/`||` parsed by iPXE.
    - Relay IDs go through `safe_slug()`.

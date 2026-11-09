@@ -2,7 +2,10 @@
 
 Every script returned to a client is plain text starting with ``#!ipxe``.
 All absolute URLs are built from ``Settings.boot_url`` (BOOT_BASE_URL or
-PUBLIC_URL) - never from the request's Host header.
+PUBLIC_URL) - never from the request's Host header. The one exception is the
+``{iso_url}`` / ``{files_url}`` cmdline placeholders, which use
+``Settings.effective_linux_fetch_url`` (LINUX_FETCH_URL, falling back to the
+boot URL) because initramfs downloaders such as busybox wget may lack TLS.
 """
 
 from __future__ import annotations
@@ -66,6 +69,12 @@ class BootContext:
     arch: str | None = None
     hostname: str | None = None
     poll_seconds: int = 5
+    # Base for the {iso_url} / {files_url} placeholders; empty = base_url.
+    fetch_base_url: str = ""
+
+    @property
+    def fetch_url(self) -> str:
+        return self.fetch_base_url or self.base_url
 
     @property
     def is_efi(self) -> bool:
@@ -85,8 +94,8 @@ class BootContext:
 
     def placeholders(self, iso: IsoImage) -> dict[str, str]:
         return {
-            "{iso_url}": raw_iso_url(self.base_url, iso),
-            "{files_url}": files_url(self.base_url, iso),
+            "{iso_url}": raw_iso_url(self.fetch_url, iso),
+            "{files_url}": files_url(self.fetch_url, iso),
             "{base_url}": self.base_url,
             "{mac}": self.mac,
             "{hostname}": self.hostname or "",
@@ -268,6 +277,23 @@ def _wimboot_lines(ctx: BootContext, iso: IsoImage, token: str, with_unattend: b
     return lines
 
 
+# Live-boot initramfs scripts that download with busybox wget (no TLS):
+# casper fetches ``url=`` and Debian live-boot fetches ``fetch=``.
+_TLS_LESS_FETCH = {"boot=casper": "url=", "boot=live": "fetch="}
+
+
+def https_fetch_warning(cmdline: str) -> str | None:
+    """Warn when a casper / live-boot cmdline would download over https."""
+    words = cmdline.lower().split()
+    for marker, key in _TLS_LESS_FETCH.items():
+        if marker in words and any(w.startswith(key + "https://") for w in words):
+            return (
+                f"{marker.split('=')[1]} downloads {key} with busybox wget, which has no TLS. "
+                "Set LINUX_FETCH_URL to a plain-HTTP address of the hub."
+            )
+    return None
+
+
 def render_cmdline(ctx: BootContext, iso: IsoImage) -> str:
     cmdline = iso.cmdline or ""
     for key, value in ctx.placeholders(iso).items():
@@ -280,10 +306,13 @@ def _linux_lines(ctx: BootContext, iso: IsoImage) -> list[str]:
     if not iso.kernel_path:
         return ["echo netdispatch: this image has no kernel path configured", "goto failed"]
     args = render_cmdline(ctx, iso)
+    lines = []
+    if warning := https_fetch_warning(args):
+        lines += [f"echo netdispatch: WARNING: {ipxe_text(warning, 200)}", "sleep 3"]
     if ctx.is_efi and iso.initrd_paths:
         # Lets the EFI stub of older kernels find iPXE's combined initrd.
         args = f"initrd=initrd.magic {args}".strip()
-    lines = [f"kernel {base}/{qpath(iso.kernel_path)} {args}".rstrip() + " || goto failed"]
+    lines += [f"kernel {base}/{qpath(iso.kernel_path)} {args}".rstrip() + " || goto failed"]
     for path in iso.initrd_paths:
         lines.append(f"initrd {base}/{qpath(path)} || goto failed")
     lines.append("boot || goto failed")

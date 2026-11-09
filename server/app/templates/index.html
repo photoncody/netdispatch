@@ -462,7 +462,7 @@
           </label>
           <label class="block text-xs uppercase tracking-wider text-slate-400">Kernel command line
             <textarea x-model="isoEdit.data.cmdline" rows="3" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none"></textarea>
-            <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Placeholders: <code class="font-mono">{iso_url}</code> raw ISO, <code class="font-mono">{files_url}</code> extracted tree, <code class="font-mono">{base_url}</code>, <code class="font-mono">{mac}</code>, <code class="font-mono">{hostname}</code>, <code class="font-mono">{ip}</code>, <code class="font-mono">{relay}</code>.</span>
+            <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Placeholders: <code class="font-mono">{iso_url}</code> raw ISO, <code class="font-mono">{files_url}</code> extracted tree (both use <code class="font-mono">LINUX_FETCH_URL</code> when set), <code class="font-mono">{base_url}</code>, <code class="font-mono">{mac}</code>, <code class="font-mono">{hostname}</code>, <code class="font-mono">{ip}</code>, <code class="font-mono">{relay}</code>.</span>
           </label>
         </div>
       </template>
@@ -672,8 +672,9 @@ function netdispatch() {
         label: this.dispatch.label, after_deploy: this.dispatch.after_deploy,
       };
       try {
-        await this.api('POST', `/api/devices/${this.dispatch.device.id}/deploy`, body);
+        const res = await this.api('POST', `/api/devices/${this.dispatch.device.id}/deploy`, body);
         this.toast(`Dispatched ${iso.name} to ${this.dispatch.device.mac}`);
+        if (res && res.warning) this.toast(`Warning: ${res.warning}`, true);
         this.dispatch.open = false; this.refresh(false);
       } catch (e) { this.toast(e.message, true); }
     },
