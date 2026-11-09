@@ -3,6 +3,10 @@
 # instead of using the boot filename from DHCP, a client that already ran
 # iPXE can never be handed iPXE again (no chainload loop).
 #
+# The same file is shipped as secureboot/autoexec.ipxe for SECURE_BOOT=true:
+# the iPXE project's signed iPXE can't have a script embedded, so it fetches
+# this one from its own TFTP directory at start-up and runs it the same way.
+#
 # Locating the relay: its ProxyDHCP offer always carries the relay's address
 # as the server identifier (proxydhcp/dhcp-server). Some offers also set
 # next-server. The plain ${next-server} usually belongs to the site's real

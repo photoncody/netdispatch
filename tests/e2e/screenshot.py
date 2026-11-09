@@ -1,6 +1,6 @@
 """Screenshot a QEMU test VM's display via its monitor socket, saved as PNG.
 
-usage: sudo python3 screenshot.py <bios|uefi|win> <out.png>
+usage: sudo python3 screenshot.py <bios|uefi|uefi-sb|win|win-sb> <out.png>
 (no dependencies: converts QEMU's PPM screendump with zlib)
 """
 

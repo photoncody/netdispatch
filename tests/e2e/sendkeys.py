@@ -1,6 +1,6 @@
 """Type text into a QEMU test VM via its monitor socket.
 
-usage: sudo python3 sendkeys.py <bios|uefi|win> "text\\n"
+usage: sudo python3 sendkeys.py <bios|uefi|uefi-sb|win|win-sb> "text\\n"
 '\\n' becomes Enter. Special keys: pass e.g. "{esc}" or "{meta_l-r}" (QEMU key names).
 Note: the Windows key is unreliable through QEMU; prefer typing into a focused window.
 """
