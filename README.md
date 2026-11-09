@@ -370,6 +370,8 @@ Templates can contain per-machine values, filled in when each machine downloads 
 
 Templates are checked when you save them: the result must be valid XML. Use **Preview rendered** to see the final file.
 
+Answer files from generators such as [schneegans.de](https://schneegans.de/windows/unattend-generator/) work too. Some of their scripts look for the answer file themselves, so before Setup starts WinPE puts a copy at `X:\autounattend.xml` and records its path in the registry (`HKLM\System\Setup`, value `UnattendFile`). That's the first place Windows Setup itself looks.
+
 ### Drivers in WinPE
 
 Windows PE only includes standard drivers.

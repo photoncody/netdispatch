@@ -83,6 +83,10 @@ def test_full_deploy_cycle_windows(client, admin, windows_iso):
     assert f"\\\\10.0.0.5\\netdispatch\\{windows_iso}" in cmd
     assert '"smb-pw%%1"' in cmd  # % escaped for cmd.exe
     assert "/unattend:X:\\Windows\\System32\\autounattend.xml" in cmd
+    # answer-file scripts (e.g. schneegans.de pe.cmd) can find the file themselves
+    assert "reg add HKLM\\System\\Setup /v UnattendFile /t REG_SZ /d X:\\Windows\\System32\\autounattend.xml /f" in cmd
+    assert "copy /y X:\\Windows\\System32\\autounattend.xml X:\\autounattend.xml" in cmd
+    assert cmd.index("reg add HKLM") < cmd.index("/unattend:")
     # a failed share connection prints network diagnostics and offers a prompt
     assert "call :diag" in cmd and "\r\n:diag\r\n" in cmd and "ipconfig" in cmd
     assert "ping -n 1 -w 2000 10.0.0.5" in cmd
