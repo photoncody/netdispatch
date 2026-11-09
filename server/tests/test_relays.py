@@ -25,6 +25,7 @@ def test_per_relay_key_lifecycle(client, admin):
     compose = r.json()["compose"]
     assert key in compose and "network_mode: host" in compose and "NET_ADMIN" in compose
     assert 'CENTRAL_SERVER_URL: "http://10.0.0.5:8000"' in compose
+    assert '# SECURE_BOOT: "true"' in compose
 
     hb = dict(HB, relay_id="site-b")
     assert client.post("/api/relays/heartbeat", json=hb, headers={"X-Relay-Key": key}).status_code == 200

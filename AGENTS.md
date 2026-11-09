@@ -14,10 +14,13 @@ PXE boot coordination, hub-and-spoke.
   - the admin JSON API under `/api/*`
 - **Samba sidecar (`samba/`)** is a read-only SMB share of `data/extracted/`. WinPE runs Windows Setup from it.
 - **Relay (`relay/`)** is Alpine + dnsmasq in **ProxyDHCP + TFTP** mode, plus a curl heartbeat. It is stateless and runs with host networking. Its iPXE binaries are **compiled from source** (pinned `v2.0.0`) with an embedded script.
+  - For `SECURE_BOOT=true` it also ships the iPXE project's **prebuilt signed** binaries in `/tftp/secureboot/`, downloaded at build time and pinned by SHA-256 (see "Secure Boot" below).
 
 Boot chain:
 1. Firmware PXE → relay ProxyDHCP → TFTP `ipxe.efi` / `undionly.kpxe`.
+   - With `SECURE_BOOT=true`, UEFI gets `secureboot/ipxe-shimx64.efi` (Microsoft-signed shim), which TFTP-loads the signed `secureboot/ipxe.efi`.
 2. The **embedded script** runs `dhcp`, then TFTP-fetches `netdispatch.ipxe` from the relay. The relay's entrypoint generates that file at start-up.
+   - The signed iPXE can't embed a script. It fetches `secureboot/autoexec.ipxe` instead, which is `embed.ipxe` copied in at build time, so both paths run the same script.
 3. `netdispatch.ipxe` chains `CENTRAL_SERVER_URL/boot?mac=…&relay=…`.
 4. The hub returns either a wait-loop script, a payload script, or a local-boot script.
 
@@ -38,7 +41,8 @@ Boot chain:
 | `server/app/templates/` | `index.html` (whole SPA), `login.html` |
 | `server/tests/` | pytest (unit + TestClient integration) |
 | `relay/entrypoint.sh` | env validation, interface/subnet detection, writes `dnsmasq.conf` + `/tftp/netdispatch.ipxe` |
-| `relay/ipxe/embed.ipxe`, `relay/ipxe/general.h` | compiled into the iPXE binaries |
+| `relay/ipxe/embed.ipxe`, `relay/ipxe/general.h` | compiled into the iPXE binaries. `embed.ipxe` is also shipped as `secureboot/autoexec.ipxe`. |
+| `relay/Dockerfile` | `ipxe` stage (compile), `ipxe-signed` stage (download signed shim + iPXE, SHA-pinned), runtime |
 | `tests/e2e/` | QEMU end-to-end harness (isolated bridge, fake router DHCP, BIOS/UEFI/Windows VMs) |
 | `examples/unattend/` | tested sample templates |
 
@@ -102,6 +106,8 @@ You need these packages: `qemu-system-x86 ovmf dnsmasq-base`.
    sudo tests/e2e/vm.sh uefi
    ```
    The other modes are `bios` and `win new`.
+   - `uefi-sb` and `win-sb new` run OVMF with Secure Boot enforced and only Microsoft's keys enrolled (`OVMF_CODE_4M.secboot.fd` + `OVMF_VARS_4M.ms.fd`, SMM on).
+   - They need a relay started with `-e SECURE_BOOT=true`. Without it, OVMF refuses our `ipxe.efi` with *Access Denied*. That's a useful negative check.
 4. Inspect what happened:
    ```bash
    sudo python3 tests/e2e/screenshot.py uefi /tmp/u.png
@@ -120,6 +126,11 @@ Verified with this harness:
 - UEFI native PXE and BIOS (iPXE ROM chainload) reach the hold loop.
 - Alpine boots on both.
 - Windows 11 installs unattended to the desktop from `examples/unattend/win11-uefi-basic.xml`.
+- With Secure Boot enforced (`uefi-sb`, `win-sb`, relay `SECURE_BOOT=true`):
+  - the hold loop and local boot (the firmware moves on to the next entry);
+  - the DHCP fallback when `autoexec.ipxe` is missing;
+  - the Windows 11 unattended install;
+  - BIOS and non-Secure Boot UEFI clients, unchanged, on the same relay.
 
 ## Core invariants (don't break these)
 
@@ -131,6 +142,7 @@ Verified with this harness:
    - UEFI firmware only tries the next boot entry when a boot option *fails*. A successful return drops EDK2 into its setup menu. The original bug was exactly this: it worked on SeaBIOS and broke on OVMF.
    - The mechanism: `render_local()` does `set nd-local 1` and `exit 0`. The relay's `netdispatch.ipxe` and `embed.ipxe` both check `isset ${nd-local}` and `exit 1`. Any other return means "hub unreachable", so they retry.
    - **This logic spans three files** (`pxe_engine.py`, `relay/entrypoint.sh` heredoc, `relay/ipxe/embed.ipxe`). Change them together.
+   - The Secure Boot path uses the same `embed.ipxe` (as `autoexec.ipxe`). Its `exit 1` makes the signed iPXE fail, the shim passes the failure on, and the firmware tries the next entry. This was verified on OVMF with Secure Boot enforced.
 3. **The wait loop uses `chain --replace --autofree`.**
    - Without `--replace`, every poll nests a script and iPXE eventually runs out of memory.
    - `--replace` keeps the call stack, so the replaced script's `exit` still returns to the relay script.
@@ -163,7 +175,17 @@ Verified with this harness:
   - `direct` uses dnsmasq user-class tags to send existing-iPXE clients straight to `netdispatch.ipxe`.
 - **iPXE ANSI:** `set esc:hex 1b`, then `${esc:string}[2J`. A plain `${esc}` prints the hex text "1b".
 - **Trailing `||` in iPXE:** use explicit `|| goto label` rather than a trailing `||`.
-- **iPXE EFI looks for `autoexec.ipxe` before running the embedded script.** The "not found" TFTP log lines are harmless. Don't add that file: it would run *instead of* the embedded script, before `dhcp`.
+- **iPXE EFI looks for `autoexec.ipxe` before running the embedded script.**
+  - It looks in its own TFTP directory first, then in the TFTP root. The "not found" TFTP log lines are harmless.
+  - Don't add `autoexec.ipxe` to the TFTP root: it would run *instead of* the embedded script, before `dhcp`.
+  - `secureboot/autoexec.ipxe` is deliberate. The signed iPXE has no embedded script, and only clients loaded from `secureboot/` find that file.
+- **Secure Boot (`SECURE_BOOT=true`):**
+  - Sources: `ipxeboot.tar.gz` from the ipxe/ipxe release (`x86_64-sb/ipxe.efi`, `snponly.efi`, signed by the iPXE CA), plus `ipxe-shimx64.efi` from the ipxe/shim release. The release shim is dual-signed with the Microsoft UEFI CA 2011 and 2023, while the tarball's `shimx64.efi` has only the 2011 signature. Neither project publishes checksums: the pins in `relay/Dockerfile` are our own, and a re-uploaded asset fails the build on purpose.
+  - The shim loads the iPXE named after itself (`<name>-shimx64.efi` → `<name>.efi`, same TFTP directory). That's why `snponly-shimx64.efi` is a copy of the same shim, and why the files live in a subdirectory: the signed `ipxe.efi` would clash with ours.
+  - TFTP log lines about missing `revocations_*.efi` / `shim_certificate_0.efi` come from the shim probing for optional files. They're harmless.
+  - **Loop guard:** if `autoexec.ipxe` can't be fetched, the signed iPXE falls back to DHCP autoboot. Handing it the shim again would nest forever. So with `SECURE_BOOT=true`, UEFI clients with user class `iPXE` always get `netdispatch.ipxe`, as in `IPXE_CLIENTS=direct`.
+  - The signed iPXE is prebuilt. It ignores `relay/certs/` (no private CA) and `general.h`.
+  - Payloads under Secure Boot: wimboot (the pinned release is signed) and Windows are signed. A `linux` kernel loaded directly is refused. `sanboot` works when the ISO's own loader is signed. Distribution kernels could also boot through iPXE's `shim` command with the ISO's `BOOTX64.EFI`; that isn't implemented.
 - **dnsmasq:**
   - `pxe-service` basenames that contain a dot are used verbatim, while names without one get `.0` appended.
   - `port=0` disables DNS. Keep it, since relays must not answer DNS.

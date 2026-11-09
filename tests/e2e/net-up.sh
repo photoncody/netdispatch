@@ -4,7 +4,7 @@
 #   bridge ndtest0 10.77.0.1/24   <- relay (host network) and hub port 8000 are reached here
 #   netns ndrouter 10.77.0.254    <- stand-in for the site's real DHCP server:
 #                                    leases .100-.200, NO PXE options (like a typical router)
-#   taps ndtap0..2                <- QEMU clients (see vm.sh)
+#   taps ndtap0..4                <- QEMU clients (see vm.sh)
 #
 # Needs: iproute2, iptables, dnsmasq (dnsmasq-base is enough).
 set -eu
@@ -23,7 +23,7 @@ ip netns exec ndrouter ip addr replace 10.77.0.254/24 dev ndr-ns
 ip netns exec ndrouter ip link set ndr-ns up
 ip netns exec ndrouter ip link set lo up
 
-for t in ndtap0 ndtap1 ndtap2; do
+for t in ndtap0 ndtap1 ndtap2 ndtap3 ndtap4; do
   ip tuntap add dev "$t" mode tap 2>/dev/null || true
   ip link set "$t" master ndtest0 up
 done

@@ -24,12 +24,37 @@ HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-30}"
 #            are also given netdispatch's iPXE build (HTTPS + trusted CAs).
 # direct:    such clients skip the binary and fetch netdispatch.ipxe directly.
 IPXE_CLIENTS="${IPXE_CLIENTS:-chainload}"
+# true: UEFI x86_64 clients get the iPXE project's Microsoft-signed shim and
+#       signed iPXE (secureboot/ in the TFTP root) instead of our own build,
+#       so they boot with UEFI Secure Boot enabled.
+SECURE_BOOT="${SECURE_BOOT:-false}"
 CENTRAL_SERVER_URL="${CENTRAL_SERVER_URL%/}"
 
 case "$IPXE_CLIENTS" in
   chainload|direct) ;;
   *) die "IPXE_CLIENTS must be 'chainload' or 'direct' (got '$IPXE_CLIENTS')" ;;
 esac
+case "$SECURE_BOOT" in
+  true|false) ;;
+  *) die "SECURE_BOOT must be 'true' or 'false' (got '$SECURE_BOOT')" ;;
+esac
+if [ "$SECURE_BOOT" = "true" ]; then
+  # The shim loads the signed iPXE named after it: ipxe-shimx64.efi -> ipxe.efi.
+  case "$UEFI_BOOTFILE" in
+    ipxe.efi|snponly.efi) UEFI_BOOTFILE="secureboot/${UEFI_BOOTFILE%.efi}-shimx64.efi" ;;
+    secureboot/*) ;;
+    *) die "with SECURE_BOOT=true, UEFI_BOOTFILE must be ipxe.efi or snponly.efi (got '$UEFI_BOOTFILE')" ;;
+  esac
+  case "$CENTRAL_SERVER_URL" in
+    https://*)
+      if ls /usr/local/share/ca-certificates/netdispatch/*.crt >/dev/null 2>&1; then
+        log "WARNING: SECURE_BOOT=true uses the iPXE project's signed iPXE, which does not trust"
+        log "         the CA certificates in relay/certs. UEFI clients can only reach an https hub"
+        log "         whose certificate chains to a public CA; otherwise use an http:// hub URL."
+      fi
+      ;;
+  esac
+fi
 
 echo "$RELAY_ID" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,62}$' \
   || die "RELAY_ID must be lowercase letters, digits, '.', '_' or '-' (got '$RELAY_ID')"
@@ -108,28 +133,41 @@ CONF=/etc/dnsmasq.d/netdispatch.conf
   echo
   echo "# PXE boot menu entries; the client architecture (DHCP option 93) selects one."
   echo "pxe-prompt=\"netdispatch\",0"
-  if [ "$IPXE_CLIENTS" = "direct" ]; then
-    echo "# IPXE_CLIENTS=direct: clients already running iPXE fetch the boot script directly."
+  # Which clients that already run iPXE (DHCP user class "iPXE" / option 175)
+  # are sent straight to netdispatch.ipxe instead of being given a binary:
+  #   IPXE_CLIENTS=direct  all of them.
+  #   SECURE_BOOT=true     UEFI ones too. The signed iPXE normally runs
+  #                        secureboot/autoexec.ipxe and never looks at the DHCP
+  #                        filename, but if that download fails it falls back
+  #                        to DHCP; handing it the shim again would nest forever.
+  #   otherwise            none: netdispatch's own iPXE build ignores the DHCP
+  #                        filename (embedded script), so chainloading can't loop.
+  bios_direct=false; uefi_direct=false
+  [ "$IPXE_CLIENTS" = "direct" ] && { bios_direct=true; uefi_direct=true; }
+  [ "$SECURE_BOOT" = "true" ] && uefi_direct=true
+  if [ "$bios_direct" = "true" ] || [ "$uefi_direct" = "true" ]; then
     echo "dhcp-userclass=set:ipxe,iPXE"
     echo "dhcp-match=set:ipxe,175"
-    echo "pxe-service=tag:!ipxe,x86PC,\"netdispatch (BIOS)\",${BIOS_BOOTFILE}"
-    echo "pxe-service=tag:!ipxe,X86-64_EFI,\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
-    echo "pxe-service=tag:!ipxe,BC_EFI,\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
-    echo "pxe-service=tag:ipxe,x86PC,\"netdispatch\",netdispatch.ipxe"
-    echo "pxe-service=tag:ipxe,X86-64_EFI,\"netdispatch\",netdispatch.ipxe"
-    echo "pxe-service=tag:ipxe,BC_EFI,\"netdispatch\",netdispatch.ipxe"
-  else
-    echo "# IPXE_CLIENTS=chainload: every client gets netdispatch's iPXE build. Its"
-    echo "# embedded script ignores the DHCP boot filename, so this cannot loop."
-    echo "pxe-service=x86PC,\"netdispatch (BIOS)\",${BIOS_BOOTFILE}"
-    echo "pxe-service=X86-64_EFI,\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
-    echo "pxe-service=BC_EFI,\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
   fi
+  if [ "$bios_direct" = "true" ]; then
+    echo "pxe-service=tag:!ipxe,x86PC,\"netdispatch (BIOS)\",${BIOS_BOOTFILE}"
+    echo "pxe-service=tag:ipxe,x86PC,\"netdispatch\",netdispatch.ipxe"
+  else
+    echo "pxe-service=x86PC,\"netdispatch (BIOS)\",${BIOS_BOOTFILE}"
+  fi
+  for csa in X86-64_EFI BC_EFI; do
+    if [ "$uefi_direct" = "true" ]; then
+      echo "pxe-service=tag:!ipxe,${csa},\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
+      echo "pxe-service=tag:ipxe,${csa},\"netdispatch\",netdispatch.ipxe"
+    else
+      echo "pxe-service=${csa},\"netdispatch (UEFI)\",${UEFI_BOOTFILE}"
+    fi
+  done
 } > "$CONF"
 
 log "relay '${RELAY_ID}' (${RELAY_NAME})"
 log "  interface ${RELAY_INTERFACE}  ip ${RELAY_IP}  proxy-dhcp ${SUBNET_RANGE}"
-log "  hub ${CENTRAL_SERVER_URL}  uefi=${UEFI_BOOTFILE} bios=${BIOS_BOOTFILE} ipxe-clients=${IPXE_CLIENTS}"
+log "  hub ${CENTRAL_SERVER_URL}  uefi=${UEFI_BOOTFILE} bios=${BIOS_BOOTFILE} ipxe-clients=${IPXE_CLIENTS} secure-boot=${SECURE_BOOT}"
 dnsmasq --test --conf-file="$CONF" >/dev/null 2>&1 || { dnsmasq --test --conf-file="$CONF"; die "invalid dnsmasq configuration"; }
 
 /usr/local/bin/heartbeat.sh &

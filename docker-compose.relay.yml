@@ -50,6 +50,11 @@ services:
       #   chainload - give them netdispatch's iPXE build too (HTTPS + your CA)
       #   direct    - let them fetch the boot script directly (one TFTP transfer less)
       # IPXE_CLIENTS: chainload
+      # UEFI Secure Boot: "true" serves the iPXE project's Microsoft-signed shim
+      # and signed iPXE to UEFI machines, so they boot with Secure Boot on.
+      # Payloads must be signed too (Windows, or ISOs with a signed loader via
+      # sanboot); the hub URL can't rely on a private CA from relay/certs.
+      # SECURE_BOOT: "false"
       # Log every DHCP exchange (useful while setting up).
       # RELAY_LOG_DHCP: "true"
       # HEARTBEAT_INTERVAL: "30"

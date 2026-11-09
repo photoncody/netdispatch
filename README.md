@@ -151,7 +151,7 @@ Booting machines run iPXE, which downloads everything from `BOOT_BASE_URL`. It d
 
 - **Simplest and fastest:** use the hub's plain-HTTP LAN address, for example `BOOT_BASE_URL=http://10.0.0.5:8000`. Multi-gigabyte Windows images transfer faster without TLS.
 - **HTTPS with a public certificate** (for example Let's Encrypt): `PUBLIC_URL` works as is.
-- **HTTPS with a private/internal CA:** iPXE won't trust it by default. Either use a plain-HTTP boot URL, or put your CA certificate in `relay/certs/` before building the relays. See [relay/certs/README.md](relay/certs/README.md).
+- **HTTPS with a private/internal CA:** iPXE won't trust it by default. Either use a plain-HTTP boot URL, or put your CA certificate in `relay/certs/` before building the relays. See [relay/certs/README.md](relay/certs/README.md). Relays with `SECURE_BOOT` on can't use a private CA, so give them the plain-HTTP URL.
 
 Relays use the same address as their `CENTRAL_SERVER_URL`. Generated relay snippets fill it in for you.
 
@@ -299,6 +299,7 @@ Relay options (environment variables in the compose file):
 | `SUBNET_RANGE` | detected from the interface | you want to state the subnet explicitly, e.g. `192.168.20.0,proxy` |
 | `UEFI_BOOTFILE` | `ipxe.efi` | a UEFI machine's network card isn't detected. Try `snponly.efi`, which uses the firmware's own driver. |
 | `IPXE_CLIENTS` | `chainload` | `direct` skips loading netdispatch's iPXE on machines that already run iPXE, such as some VMs. Only works without HTTPS or a private CA. |
+| `SECURE_BOOT` | `false` | `true` lets UEFI machines boot with Secure Boot turned on. See [UEFI Secure Boot](#uefi-secure-boot). |
 | `RELAY_LOG_DHCP` | `true` | set to `false` to quiet the logs once everything works |
 
 **Several VLANs on one host:** run one relay container per VLAN interface. Give each its own `RELAY_ID`, key and `RELAY_INTERFACE`.
@@ -312,6 +313,26 @@ docker compose --profile local-relay up -d
 - **Rotate key** issues a new key; the old one stops working immediately.
 - **Disable** blocks a relay without deleting it.
 - A bootstrap `RELAY_API_KEY` on the hub lets relays register themselves on first contact. It's convenient in a lab, but per-relay keys are safer.
+
+### UEFI Secure Boot
+
+By default, UEFI machines need Secure Boot turned off: the relay serves netdispatch's own iPXE build, which isn't signed. Set `SECURE_BOOT: "true"` on a relay to boot them with Secure Boot left on.
+
+With it set, 64-bit UEFI machines on that relay load the [iPXE project's signed binaries](https://ipxe.org/secboot) instead of netdispatch's build. A shim signed by Microsoft's UEFI CA (2011 and 2023) loads an iPXE build signed by the iPXE project. Machines with the standard Microsoft keys accept it, so you don't enroll any keys of your own. BIOS machines aren't affected. Machines with Secure Boot turned off boot the signed files too.
+
+What works with Secure Boot on:
+
+| Image | With Secure Boot |
+|---|---|
+| Windows Setup / WinPE | Works. wimboot and Windows are both signed. |
+| `sanboot` of an ISO | Works when the ISO's own UEFI boot loader is signed for Secure Boot, as in most mainstream Linux distributions. The firmware refuses ISOs whose boot loader isn't signed. |
+| `linux` (kernel + initrd) | Doesn't work. The firmware refuses a kernel loaded directly, so the machine shows an error and returns to the hold screen. Use `sanboot` with the distribution's ISO instead. |
+| `memdisk` | BIOS only, so Secure Boot doesn't apply. |
+
+Limits of the signed iPXE:
+- **No private CA.** It only trusts public CAs, not certificates in `relay/certs/`. With an internal CA, give relays a plain `http://` hub URL.
+- **Prebuilt only.** iPXE options from `relay/ipxe/general.h` (`ping`, `nslookup`, `ntp`) aren't available.
+- `UEFI_BOOTFILE` still picks the variant: `ipxe.efi` (default) or `snponly.efi`.
 
 ## Add images
 
@@ -459,6 +480,8 @@ docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exch
 | Hold screen never appears; iPXE says *no ProxyDHCP relay answered* | Same as above. Also make sure the router's DHCP doesn't send its own PXE options. |
 | iPXE says *hub unreachable … retrying* | Machines can't reach `CENTRAL_SERVER_URL`. Check routing and firewalls. With HTTPS and a private CA, see [Which boot URL?](#which-boot-url). |
 | Relay card shows **offline** | Run `docker logs netdispatch-relay`. *invalid RELAY_API_KEY* means rotate the key and update the relay. *relay is disabled* means enable it. Connection errors mean the relay can't reach the hub. |
+| A UEFI machine downloads `ipxe.efi`, then reports *Access Denied* or a *Secure Boot violation* | Secure Boot is on. Set `SECURE_BOOT: "true"` on the relay (see [UEFI Secure Boot](#uefi-secure-boot)), or turn Secure Boot off in the firmware. |
+| With `SECURE_BOOT` on, a `linux` image fails to boot and the machine returns to the hold screen | The firmware refuses a kernel loaded directly under Secure Boot. Use `sanboot` with the distribution's ISO, or turn Secure Boot off on that machine. |
 | After an install, a UEFI machine stops in its firmware menu | No bootable disk entry follows the network entry in the boot order, or the install didn't complete. Check the boot order in the firmware. |
 | WinPE keeps printing *cannot reach \\\\…\\netdispatch\\N* | After 3 failed attempts, and every 10 after that, WinPE prints network diagnostics. *WinPE sees NO network adapter* means it has no driver for the network card: VirtIO VMs hit this (see [Drivers in WinPE](#drivers-in-winpe)). *No IPv4 address from DHCP* points at the cable, VLAN or DHCP server. Otherwise TCP 445 is blocked, `SMB_HOST` is wrong, or `SMB_PASSWORD` is empty. Press **C** during the 10-second wait for a command prompt; `exit` goes back to retrying. |
 | Windows Setup shows no disks | WinPE has no storage driver: Intel VMD/RST, VirtIO or RAID. See [Drivers in WinPE](#drivers-in-winpe). |
@@ -489,7 +512,7 @@ After changing a setting, apply it with `docker compose up -d`.
 ## Limitations
 
 - Machines must be x86: legacy BIOS, or 64-bit UEFI. 32-bit UEFI and ARM devices aren't supported yet.
-- UEFI **Secure Boot must be disabled** on machines being booted. netdispatch's iPXE and wimboot aren't signed by Microsoft.
+- UEFI **Secure Boot** needs `SECURE_BOOT: "true"` on the relay, and then only works with signed payloads: Windows, and ISOs with a signed boot loader. See [UEFI Secure Boot](#uefi-secure-boot).
 - Relays don't cache images. Remote sites download them from the hub, so large Windows images cross the WAN link.
 - The dashboard shows when a payload was served and when the machine returned. It doesn't show progress inside Windows Setup.
 - There is a single administrator role.

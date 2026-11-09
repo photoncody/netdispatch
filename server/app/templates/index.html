@@ -464,10 +464,11 @@
             <textarea x-model="isoEdit.data.cmdline" rows="3" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none"></textarea>
             <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Placeholders: <code class="font-mono">{iso_url}</code> raw ISO, <code class="font-mono">{files_url}</code> extracted tree (both use <code class="font-mono">LINUX_FETCH_URL</code> when set), <code class="font-mono">{base_url}</code>, <code class="font-mono">{mac}</code>, <code class="font-mono">{hostname}</code>, <code class="font-mono">{ip}</code>, <code class="font-mono">{relay}</code>.</span>
           </label>
+          <p class="text-xs text-slate-400">UEFI Secure Boot refuses a kernel loaded this way. For machines with Secure Boot on, use <span class="font-mono">sanboot</span> with a distribution whose ISO has a signed boot loader.</p>
         </div>
       </template>
       <p x-show="isoEdit.data.boot_method === 'sanboot' || isoEdit.data.boot_method === 'memdisk'" class="text-xs text-slate-400">
-        The raw ISO is served over HTTP. sanboot works for many UEFI-bootable ISOs and diagnostic tools; memdisk loads the whole image into RAM and only works on BIOS clients with small images. Most full Linux distributions need the <span class="font-mono">linux</span> method instead.
+        The raw ISO is served over HTTP. sanboot works for many UEFI-bootable ISOs and diagnostic tools; memdisk loads the whole image into RAM and only works on BIOS clients with small images. Most full Linux distributions need the <span class="font-mono">linux</span> method instead, except on machines with UEFI Secure Boot on: there, sanboot works when the ISO's boot loader is signed (as in most mainstream distributions).
       </p>
       <div class="flex flex-wrap gap-2 text-xs">
         <button type="button" @click="isoAction('redetect')" class="rounded border border-slate-700 px-2 py-1 hover:border-slate-500">Re-run auto-detection</button>
