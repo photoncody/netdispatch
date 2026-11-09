@@ -196,6 +196,15 @@ sync_iso() {
     set_item "$id" pending "" 0 0 "image is being updated on the hub"
     return 0
   fi
+  err="$(echo "$obj" | jq -r '.error // empty' | tr -d '[:cntrl:]' | cut -c1-200)"
+  if [ -n "$err" ]; then
+    # The hub can't let relays cache this image (e.g. paths that differ only in
+    # letter case): drop any copy so it doesn't take up space.
+    log "image $id can't be cached: $err"
+    rm -rf -- "${CACHE_DIR:?}/tree/$id" "${CACHE_DIR:?}/raw/$id"
+    set_item "$id" error "" 0 0 "$err"
+    return 0
+  fi
   etag="$(echo "$obj" | jq -r .etag)"
   total="$(echo "$obj" | jq -r .total_bytes)"
   list="$WORK/files-$id"
@@ -212,6 +221,13 @@ sync_iso() {
     | [.dest, (.size|tostring), (.mtime|tostring), .src] | join("\t")' > "$list"
   listed="$(echo "$obj" | jq '.files | length')"
   kept="$(wc -l < "$list")"
+  # Two entries for one path would both count towards the total while one
+  # overwrites the other. The hub never sends that; don't trust it blindly.
+  if [ "$(cut -f1 "$list" | sort | uniq -d | wc -l)" -ne 0 ]; then
+    log "image $id: manifest lists the same path more than once"
+    set_item "$id" error "" 0 "$total" "manifest lists the same path more than once - not caching this image"
+    return 0
+  fi
   if [ "$kept" -ne "$listed" ] || [ "$listed" -eq 0 ]; then
     # Never report an incomplete copy as ready: the hub would send clients here.
     log "image $id: $((listed - kept)) of $listed manifest entries rejected as unsafe"

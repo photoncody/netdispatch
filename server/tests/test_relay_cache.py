@@ -131,6 +131,35 @@ def test_manifest_layout_follows_boot_method(client, admin, app, settings, relay
     assert doc["smb"] is None  # no Windows Setup image assigned
 
 
+@pytest.mark.parametrize(
+    "paths, clash",
+    [
+        (["casper/vmlinuz", "casper/initrd", "casper/INITRD"], "casper/INITRD and casper/initrd differ only in letter case"),
+        (["casper/vmlinuz", "casper/initrd", "Casper/initrd"], "Casper/initrd and casper/initrd differ only in letter case"),
+        (["casper/vmlinuz", "casper/initrd", "extra", "EXTRA/file"], "extra clashes with a directory"),
+    ],
+)
+def test_case_colliding_image_is_not_cacheable(paths, clash, client, admin, app, settings, relay_key):
+    iso = _add_iso(
+        app, settings, name="Odd", filename="odd.iso", boot_method="linux",
+        kernel_path="casper/vmlinuz", initrd_paths_json='["casper/initrd"]',
+    )
+    make_tree(settings.extracted_dir / str(iso), paths)
+    _assign(admin, iso)
+    [entry] = _manifest(client, relay_key).json()["isos"]
+    # no files to sync: the relay drops its copy and reports the reason
+    assert entry["id"] == iso and "files" not in entry and "etag" not in entry
+    assert clash in entry["error"]
+
+    # Even a relay claiming a complete copy is never used for it.
+    _report_ready(client, relay_key, iso, etag="a" * 64)
+    view = admin.get("/api/relays/site-a/cache").json()
+    item = next(i for i in view["items"] if i["iso_id"] == iso)
+    assert item["status"] == "error" and clash in item["message"] and not item["usable"]
+    script = _deploy(client, admin, iso)
+    assert CACHE_URL not in script and "/files/iso/" in script
+
+
 def test_manifest_etag_tracks_content(client, admin, app, settings, relay_key, windows_iso):
     _assign(admin, windows_iso)
     first = _manifest(client, relay_key).json()

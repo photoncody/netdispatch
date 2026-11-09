@@ -29,7 +29,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,9 @@ class IsoManifest:
     etag: str
     files: list[dict] = field(default_factory=list)
     total_bytes: int = 0
+    # Set when the image can't be cached at all; ``files`` is then empty, so
+    # no relay copy ever counts as current and clients use the hub.
+    error: str | None = None
 
 
 def _needs_tree(iso: IsoImage) -> bool:
@@ -106,6 +109,35 @@ def _file_entry(dest: str, src: str, path: Path) -> dict | None:
     except OSError:
         return None
     return {"dest": dest, "src": src, "size": st.st_size, "mtime": int(st.st_mtime)}
+
+
+def _case_clash(files: list[dict]) -> str | None:
+    """Why the lower-cased destinations can't all exist on a relay, or None.
+
+    The hub serves ``kernel`` and ``KERNEL`` as two files, but a relay stores
+    both at one lower-case path, and a file ``a`` can't sit next to a
+    directory ``A/``. Caching such an image would serve one file's bytes for
+    the other, so the whole image stays on the hub.
+    """
+    seen: dict[str, str] = {}
+    dirs: set[str] = set()
+    for f in files:
+        dest = f["dest"]
+        if dest in seen:
+            first, second = sorted((_shown(seen[dest]), _shown(f["src"])))
+            return f"{first} and {second} differ only in letter case"
+        seen[dest] = f["src"]
+        parts = dest.split("/")
+        dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    for dest, src in seen.items():
+        if dest in dirs:
+            return f"{_shown(src)} clashes with a directory of the same name in another letter case"
+    return None
+
+
+def _shown(src: str) -> str:
+    """A manifest ``src`` as the path inside the image, for messages."""
+    return unquote(src.split("/", 5)[-1])
 
 
 def build_manifest(settings: Settings, iso: IsoImage) -> IsoManifest:
@@ -139,6 +171,10 @@ def build_manifest(settings: Settings, iso: IsoImage) -> IsoManifest:
         if entry:
             files.append(entry)
     files.sort(key=lambda f: f["dest"])
+    clash = _case_clash(files)
+    if clash:
+        log.warning("image %s can't be cached on relays: %s", iso.id, clash)
+        return IsoManifest(iso.id, "", [], 0, clash)
     # The etag covers content identity only, so editing the image's name or
     # boot settings doesn't force relays to re-download.
     digest = hashlib.sha256(
@@ -199,6 +235,10 @@ def relay_manifest(db: Session, settings: Settings, cache: ManifestCache, relay_
         manifest = cache.get(settings, iso)
         if manifest is None:
             isos.append({"id": iso.id, "keep": True})
+            continue
+        if manifest.error:
+            # The relay drops its copy and reports the reason back.
+            isos.append({"id": iso.id, "name": iso.name, "error": manifest.error})
             continue
         isos.append(
             {
@@ -322,6 +362,7 @@ def delete_for_relay(db: Session, relay_id: str) -> None:
 # ---------------------------------------------------------------- admin views
 def item_out(item: RelayCacheItem | None, iso: IsoImage, manifest: IsoManifest | None) -> dict:
     usable = is_current(item, manifest)
+    uncacheable = manifest.error if manifest else None
     return {
         "iso_id": iso.id,
         "iso_name": iso.name,
@@ -329,13 +370,13 @@ def item_out(item: RelayCacheItem | None, iso: IsoImage, manifest: IsoManifest |
         "boot_method": iso.boot_method,
         "assigned": item is not None,
         "cache_bytes": manifest.total_bytes if manifest else None,
-        "status": item.status if item else None,
+        "status": "error" if item and uncacheable else (item.status if item else None),
         # ready on the relay but for an older version of the image
-        "stale": bool(item and item.status == CACHE_READY and not usable),
+        "stale": bool(item and item.status == CACHE_READY and not usable and not uncacheable),
         "usable": usable,
         "bytes_done": item.bytes_done if item else 0,
         "bytes_total": item.bytes_total if item else 0,
-        "message": item.message if item else None,
+        "message": uncacheable or (item.message if item else None),
         "updated_at": item.updated_at.isoformat(timespec="seconds") + "Z" if item and item.updated_at else None,
     }
 
