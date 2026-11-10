@@ -224,6 +224,12 @@ def test_unbounded_target_disk_sizes_are_kept(admin, unattendgen):
     bounded["setup"]["scripted"]["partitioning"]["targetDisk"] = {"mode": "Auto"}
     preview = lambda s: admin.post("/api/unattend/generator/preview", json={"settings": s}).json()["rendered"]  # noqa: E731
     assert preview(settings) != preview(bounded)  # the defaults (100 to 4000 GiB) do limit the size
+    # An absent index is disk 0 as well, not "any disk" (the form reopens it as 0).
+    any_disk = copy.deepcopy(bounded)
+    any_disk["setup"]["scripted"]["partitioning"]["targetDisk"]["index"] = None
+    disk_0 = copy.deepcopy(bounded)
+    disk_0["setup"]["scripted"]["partitioning"]["targetDisk"]["index"] = 0
+    assert preview(bounded) == preview(disk_0) != preview(any_disk)
 
 
 def test_generated_name_clash(admin, unattendgen):

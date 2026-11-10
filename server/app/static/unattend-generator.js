@@ -138,7 +138,9 @@ function unattendGenerator() {
               disk: {
                 mode: disk.mode || 'Fixed',
                 index: disk.mode === 'Auto' ? 0 : (disk.index ?? 0),
-                autoIndex: disk.mode === 'Auto' ? (disk.index ?? '') : '',
+                // Like the sizes below: an absent index means the default (disk 0), and only an
+                // explicit null means any disk.
+                autoIndex: disk.mode === 'Auto' ? ('index' in disk ? (disk.index ?? '') : 0) : '',
                 // An explicit null means "no limit" and must stay empty; only absent values
                 // get the defaults.
                 minSizeGiB: 'minSizeGiB' in disk ? (disk.minSizeGiB ?? '') : 100,
