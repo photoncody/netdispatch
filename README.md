@@ -429,9 +429,45 @@ How a Windows install runs:
 
 ### Unattend templates
 
-Manage templates under **Unattend**. You can create one from scratch, import an existing `autounattend.xml` with **Import .xml**, or drop XML files into `data/configs/`.
+Manage templates under **Unattend**. You can:
+- build one with the generator (**Generate a template**, below);
+- write the XML yourself (**Raw XML template**);
+- import an existing `autounattend.xml` with **Import .xml**;
+- drop XML files into `data/configs/`.
 
-A ready-made template is included: [examples/unattend/win11-uefi-basic.xml](examples/unattend/win11-uefi-basic.xml). It has been tested end to end and does the following:
+#### The generator
+
+**Generate a template** opens a form that builds a complete answer file, like the [schneegans.de unattend generator](https://schneegans.de/windows/unattend-generator/). It uses the same library, built into the hub, so it works offline. The preview on the right updates as you change the form, using sample values.
+
+A new template starts as a hands-off Windows 11 Pro install:
+- **erases disk 0** and creates the standard partitions (GPT on UEFI, MBR on BIOS);
+- names the computer after the device (`{{ hostname }}`, below);
+- creates a local administrator, `Admin`, that signs in once automatically. **Give it a password.**
+- skips Wi-Fi setup and turns the privacy settings off.
+
+The form covers:
+- language and keyboard layouts;
+- the Windows PE stage: a generated install script, Windows Setup, or your own script;
+- edition or product key;
+- the disk layout and paging file;
+- the computer name and time zone;
+- user accounts, password expiry and account lockout;
+- app removal and custom scripts for each phase;
+- every other on/off setting the library offers.
+
+How generated templates behave:
+- **Editing:** a generated template opens in the form again. Its XML is rewritten whenever you save it, so you can't edit the XML directly.
+- **Converting:** to edit the XML by hand, use **Convert to raw XML**. The file stays as it is, and the form settings are discarded.
+- **Escaped braces:** in a converted template, literal braces from the generated scripts appear as `{{ "{" }}`. That is how a brace is written in a template, and it becomes `{` again in the file each machine downloads.
+- **Placeholders in scripts:** write `__ND_HOSTNAME__` or `__ND_MAC_PLAIN__` in a custom script to get the machine's hostname or MAC address.
+- **Passwords:** account passwords are stored with the template and written into the answer file. Use passwords meant for the first logon and change them afterwards.
+- **Upgrades:** when a newer netdispatch release updates the generator library, existing generated templates keep their file and keep working. They are marked **older** in the list until you open and save them.
+
+The generator library is [unattend-generator](https://github.com/cschneegans/unattend-generator) by Christoph Schneegans, MIT licence. Its notices are in [server/unattendgen/THIRD-PARTY-NOTICES.md](server/unattendgen/THIRD-PARTY-NOTICES.md).
+
+#### Example template
+
+A ready-made raw XML template is included: [examples/unattend/win11-uefi-basic.xml](examples/unattend/win11-uefi-basic.xml). It has been tested end to end and does the following:
 - erases disk 0 and installs Windows
 - skips the TPM, Secure Boot and RAM checks
 - creates a local administrator, `ndadmin`
@@ -440,11 +476,13 @@ A ready-made template is included: [examples/unattend/win11-uefi-basic.xml](exam
 
 **Change its password before you use it.**
 
+#### Per-machine values
+
 Templates can contain per-machine values, filled in when each machine downloads its file:
 
 | Write this in the template | Becomes |
 |---|---|
-| `{{ hostname }}` | the machine's label from the dashboard, or `ND-` + the last 6 digits of its MAC. Shortened to 15 characters, the Windows computer-name limit. |
+| `{{ hostname }}` | the machine's label from the dashboard as a valid Windows computer name: letters, digits and hyphens, with any other characters replaced by a hyphen, at most 15 characters. `Lab PC 7` becomes `Lab-PC-7`. With no label, or one that is only digits, it is `ND-` + the last 6 digits of the MAC. |
 | `{{ mac }}` | `aa:bb:cc:dd:ee:ff` |
 | `{{ mac_dash }}` | `AA-BB-CC-DD-EE-FF` |
 | `{{ mac_plain }}` | `AABBCCDDEEFF` |
@@ -454,7 +492,7 @@ Templates can contain per-machine values, filled in when each machine downloads 
 
 Templates are checked when you save them: the result must be valid XML. Use **Preview rendered** to see the final file.
 
-Answer files from generators such as [schneegans.de](https://schneegans.de/windows/unattend-generator/) work too. Some of their scripts look for the answer file themselves, so before Setup starts WinPE puts a copy at `X:\autounattend.xml` and records its path in the registry (`HKLM\System\Setup`, value `UnattendFile`). That's the first place Windows Setup itself looks.
+Answer files made on [schneegans.de](https://schneegans.de/windows/unattend-generator/) itself work too. Some of their scripts look for the answer file themselves, so before Setup starts WinPE puts a copy at `X:\autounattend.xml` and records its path in the registry (`HKLM\System\Setup`, value `UnattendFile`). That's the first place Windows Setup itself looks.
 
 ### Drivers in WinPE
 

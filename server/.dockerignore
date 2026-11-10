@@ -1,0 +1,6 @@
+**/__pycache__/
+**/.pytest_cache/
+unattendgen/external/
+unattendgen/**/bin/
+unattendgen/**/obj/
+unattendgen/**/TestResults/

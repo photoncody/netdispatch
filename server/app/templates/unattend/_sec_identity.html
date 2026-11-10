@@ -1,0 +1,23 @@
+{% from "unattend/_macros.html" import radios, select_list, section, text %}
+{% call section('identity', 'Computer name and time zone', "({Hostname: 'device hostname', Random: 'random name', Custom: gen.f.computerName.name, Prompt: 'asked during Setup'})[gen.f.computerName.mode]") %}
+  {{ radios('gen.f.computerName.mode', [
+      ('Hostname', 'The device\'s netdispatch hostname',
+       'The label you give the device when you dispatch it, made into a valid computer name; ND- and the end of the MAC address when it has none.'),
+      ('Random', 'A random name chosen by Windows'),
+      ('Custom', 'This name for every device'),
+      ('Prompt', 'Ask during Setup'),
+  ], legend='Computer name') }}
+  <template x-if="gen.f.computerName.mode === 'Custom'">
+    <div class="sm:w-1/2">{{ text('gen.f.computerName.name', 'Computer name', help='Up to 15 characters, no spaces, not only digits.') }}</div>
+  </template>
+
+  <div class="border-t border-slate-800 pt-3">
+    {{ radios('gen.f.timeZone.mode', [
+        ('Implicit', 'Derive it from the region settings'),
+        ('Explicit', 'Use this time zone'),
+    ], legend='Time zone') }}
+    <template x-if="gen.f.timeZone.mode === 'Explicit'">
+      <div class="mt-2 sm:w-2/3">{{ select_list('gen.f.timeZone.id', 'Time zone', 'gen.schema.timeZones') }}</div>
+    </template>
+  </div>
+{% endcall %}

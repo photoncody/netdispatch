@@ -77,7 +77,7 @@ def test_full_deploy_cycle_windows(client, admin, windows_iso):
     assert client.get(f"/files/iso/{windows_iso}/tree/boot/bcd").content == b"x"  # case-insensitive
     xml = client.get(f"/files/d/{token}/autounattend.xml")
     assert xml.status_code == 200
-    assert "<ComputerName>LAB-PC-07 &amp; com</ComputerName>" in xml.text  # 15 chars, XML-escaped
+    assert "<ComputerName>LAB-PC-07-compa</ComputerName>" in xml.text  # valid computer name, 15 chars
     assert NORM in xml.text
     cmd = client.get(f"/files/d/{token}/netdispatch.cmd").text
     assert f"\\\\10.0.0.5\\netdispatch\\{windows_iso}" in cmd

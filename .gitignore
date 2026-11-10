@@ -7,5 +7,9 @@ __pycache__/
 venv/
 server/app/static/app.css
 server/app/static/alpine.min.js
+server/unattendgen/external/
+server/unattendgen/**/bin/
+server/unattendgen/**/obj/
+server/unattendgen/**/TestResults/
 relay/certs/*.pem
 relay/certs/*.crt

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Core/Netdispatch.UnattendGen.Core.csproj" />
+    <Project Path="src/Cli/Netdispatch.UnattendGen.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tests/Netdispatch.UnattendGen.Tests.csproj" />
+  </Folder>
+</Solution>

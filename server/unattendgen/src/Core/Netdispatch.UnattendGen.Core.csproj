@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- Upstream, extracted by fetch-upstream.sh. Never edit files under external/. -->
+    <ProjectReference Include="..\..\external\unattend-generator\UnattendGenerator.csproj" />
+  </ItemGroup>
+
+</Project>

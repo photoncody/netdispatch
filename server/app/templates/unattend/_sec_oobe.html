@@ -1,0 +1,19 @@
+{% from "unattend/_macros.html" import checkbox, radios, section %}
+{% call section('oobe', 'Setup experience') %}
+  <div class="grid gap-4 sm:grid-cols-2">
+    {{ radios('gen.f.expressSettings', [
+        ('DisableAll', 'Turn all privacy settings off'),
+        ('EnableAll', 'Turn all privacy settings on'),
+        ('Interactive', 'Ask during Setup'),
+    ], legend='Privacy settings (express settings)') }}
+    {{ radios('gen.f.wifi.mode', [
+        ('Skip', 'Skip Wi-Fi setup'),
+        ('Interactive', 'Ask during Setup'),
+    ], legend='Wi-Fi') }}
+  </div>
+  <div class="grid gap-2 border-t border-slate-800 pt-3 sm:grid-cols-2">
+    {{ checkbox('gen.f.bypassNetworkCheck', 'Allow Setup to finish without internet', help='Windows 11 otherwise insists on a network connection during Setup.') }}
+    {{ checkbox('gen.f.flags.HidePowerShellWindows', 'Hide PowerShell windows while scripts run') }}
+    {{ checkbox('gen.f.flags.UseNarrator', 'Turn on Narrator during Setup') }}
+  </div>
+{% endcall %}

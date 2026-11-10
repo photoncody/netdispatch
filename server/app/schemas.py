@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,7 @@ from .models import (
     IsoImage,
     Relay,
     UnattendConfig,
+    UnattendGenerated,
     iso,
     utcnow,
 )
@@ -108,6 +110,18 @@ class UnattendIn(BaseModel):
     content: str = Field(min_length=1, max_length=2_000_000)
 
 
+class GeneratorIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    # The generator's settings (HostConfig JSON). Checked by the generator itself.
+    settings: dict[str, Any]
+
+
+class GeneratorPreviewIn(BaseModel):
+    settings: dict[str, Any]
+    device_id: int | None = None
+
+
 # --------------------------------------------------------------- responses
 def _age(dt: datetime | None) -> float | None:
     return (utcnow() - dt).total_seconds() if dt else None
@@ -195,7 +209,14 @@ def iso_out(i: IsoImage) -> dict:
     }
 
 
-def unattend_out(u: UnattendConfig, content: str | None = None) -> dict:
+def unattend_out(
+    u: UnattendConfig,
+    content: str | None = None,
+    generated: UnattendGenerated | None = None,
+    engine_commit: str | None = None,
+) -> dict:
+    """``generated`` is the template's generator row, if any; ``engine_commit`` the installed
+    generator's upstream commit (None when unknown), used to flag templates from an older one."""
     out = {
         "id": u.id,
         "name": u.name,
@@ -203,7 +224,11 @@ def unattend_out(u: UnattendConfig, content: str | None = None) -> dict:
         "description": u.description,
         "created_at": iso(u.created_at),
         "updated_at": iso(u.updated_at),
+        "generated": generated is not None,
     }
+    if generated is not None:
+        out["engine_commit"] = generated.upstream_commit
+        out["stale"] = bool(engine_commit and generated.upstream_commit != engine_commit)
     if content is not None:
         out["content"] = content
     return out

@@ -253,22 +253,28 @@
     <div class="mb-4 flex flex-wrap items-end gap-3">
       <div>
         <h2 class="text-xl font-semibold text-slate-100">Unattend templates</h2>
-        <p class="text-sm text-slate-400">autounattend.xml templates, injected into WinPE by wimboot when bound to a Windows Setup deployment. Stored in <span class="font-mono">/data/configs</span>.</p>
+        <p class="text-sm text-slate-400">autounattend.xml templates, injected into WinPE by wimboot when bound to a Windows Setup deployment. Build one with the generator, or write the XML yourself. Stored in <span class="font-mono">/data/configs</span>.</p>
       </div>
-      <div class="ml-auto flex gap-2">
+      <div x-show="!gen.open" class="ml-auto flex gap-2">
         <label class="cursor-pointer rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">
           Import .xml<input type="file" accept=".xml" class="hidden" @change="importUnattend($event)">
         </label>
-        <button type="button" @click="newUnattend()" class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">+ New template</button>
+        <button type="button" @click="newUnattend()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500">+ Raw XML template</button>
+        <button type="button" @click="newGenerated()" class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">+ Generate a template</button>
       </div>
     </div>
-    <div class="grid gap-4 lg:grid-cols-[16rem_1fr]">
+    {% include "unattend/_generator.html" %}
+    <div x-show="!gen.open" class="grid gap-4 lg:grid-cols-[16rem_1fr]">
       <div class="space-y-1">
         <template x-for="u in unattends" :key="u.id">
           <button type="button" @click="editUnattend(u)"
                   class="block w-full rounded-md border px-3 py-2 text-left text-sm transition"
                   :class="ua.id === u.id ? 'border-emerald-500/60 bg-slate-900' : 'border-slate-800 hover:border-slate-700'">
-            <div class="truncate text-slate-100" x-text="u.name"></div>
+            <div class="flex items-center gap-1.5">
+              <span class="truncate text-slate-100" x-text="u.name"></span>
+              <span x-show="u.generated" class="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">generated</span>
+              <span x-show="u.stale" class="shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300" title="Generated with an older generator version">older</span>
+            </div>
             <div class="truncate font-mono text-[11px] text-slate-500" x-text="u.filename + (u.missing ? ' (missing)' : '')"></div>
           </button>
         </template>
@@ -328,7 +334,7 @@
       <label class="block text-xs uppercase tracking-wider text-slate-400">Label / hostname
         <input x-model="dispatch.label" placeholder="e.g. LAB-PC-07" maxlength="128"
                class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
-        <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Available as <code class="font-mono">{{ '{{ hostname }}' }}</code> in unattend templates (first 15 characters).</span>
+        <span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">Available as <code class="font-mono">{{ '{{ hostname }}' }}</code> in unattend templates, made into a valid computer name (letters, digits and hyphens, at most 15 characters).</span>
       </label>
       <label class="block text-xs uppercase tracking-wider text-slate-400">Image
         <select x-model.number="dispatch.iso_id" class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
@@ -589,10 +595,12 @@
   </template>
 </div>
 
+<script src="/static/unattend-generator.js?v={{ asset_version }}"></script>
 <script>
 {% raw %}
 function netdispatch() {
   return {
+    ...unattendGenerator(),
     cfg: window.ND_CONFIG,
     tab: 'devices',
     tabs: [],
@@ -971,12 +979,15 @@ function netdispatch() {
 
     // ----------------------------------------------------------- unattend
     newUnattend() {
+      this.gen.open = false;
       this.ua = { open: true, id: null, name: 'New template', description: '', preview: '',
         content: '<?xml version="1.0" encoding="utf-8"?>\n<unattend xmlns="urn:schemas-microsoft-com:unattend">\n  <settings pass="specialize">\n    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">\n      <ComputerName>{{ hostname }}</ComputerName>\n    </component>\n  </settings>\n</unattend>\n' };
     },
     async editUnattend(u) {
       try {
         const res = await this.api('GET', `/api/unattend/${u.id}`);
+        if (res.generated) { this.openGenerated(res); return; }
+        this.gen.open = false;
         this.ua = { open: true, id: res.id, name: res.name, description: res.description || '', content: res.content, preview: '' };
       } catch (e) { this.toast(e.message, true); }
     },
@@ -985,6 +996,7 @@ function netdispatch() {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
+        this.gen.open = false;
         this.ua = { open: true, id: null, name: file.name.replace(/\.xml$/i, ''), description: 'imported from ' + file.name, content: reader.result, preview: '' };
         this.toast('Loaded — review and click Save');
       };

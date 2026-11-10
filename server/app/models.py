@@ -159,6 +159,36 @@ class UnattendConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class UnattendGenerated(Base):
+    """Generator settings for a template made with the built-in generator.
+
+    The template's file is regenerated from these settings whenever it is saved
+    in the generator; templates without a row here are edited as raw XML. A
+    separate table rather than columns on ``unattend_configs``: there are no
+    migrations. Rows are deleted explicitly with their template.
+    """
+
+    __tablename__ = "unattend_generated"
+
+    unattend_id: Mapped[int] = mapped_column(
+        ForeignKey("unattend_configs.id", ondelete="CASCADE"), primary_key=True
+    )
+    settings_json: Mapped[str] = mapped_column(Text)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    # unattend-generator commit the file was last generated with.
+    upstream_commit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def settings(self) -> dict:
+        try:
+            value = json.loads(self.settings_json or "{}")
+        except ValueError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
 class Device(Base):
     __tablename__ = "devices"
 

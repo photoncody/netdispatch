@@ -1,0 +1,76 @@
+{#
+  Unattend generator view (Unattend tab). Included from index.html; state and methods come
+  from static/unattend-generator.js. The form edits gen.f; gen.settings() turns it into the
+  settings the generator stores (HostConfig JSON).
+#}
+<div x-show="gen.open" x-cloak>
+  <div class="mb-4 flex flex-wrap items-end gap-3">
+    <button type="button" @click="closeGenerator()" class="rounded-md border border-slate-700 px-2.5 py-1.5 text-sm hover:border-slate-500">← Templates</button>
+    <div class="min-w-0 flex-1 basis-64">
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Template name
+        <input x-model="gen.name" maxlength="200"
+               class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+      </label>
+    </div>
+    <div class="min-w-0 flex-1 basis-64">
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Description
+        <input x-model="gen.description" maxlength="2000"
+               class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+      </label>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" x-show="gen.id" @click="detachGenerated()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500" title="Keep the XML as it is and edit it by hand from now on">Convert to raw XML</button>
+      <button type="button" x-show="gen.id" @click="deleteGenerated()" class="rounded-md border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:border-rose-400">Delete</button>
+      <button type="button" @click="saveGenerated()" :disabled="gen.saving"
+              class="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40">Save</button>
+    </div>
+  </div>
+
+  <div x-show="gen.stale" class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+    This template was generated with an older version of the generator. Its file keeps working; saving regenerates it with the current version.
+  </div>
+  <div x-show="gen.loadError" class="mb-3 rounded-md border border-rose-500/40 bg-rose-950 px-3 py-2 text-sm text-rose-100" x-text="gen.loadError"></div>
+
+  <div class="mb-3 flex flex-wrap gap-1 text-xs">
+    <template x-for="s in genSections" :key="s[0]">
+      <button type="button" @click="genJump(s[0])" class="rounded-md border border-slate-800 px-2 py-1 text-slate-400 hover:border-slate-600 hover:text-slate-200" x-text="s[1]"></button>
+    </template>
+  </div>
+
+  <template x-if="gen.f">
+  <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div class="space-y-3" @input.debounce.700ms="genChanged()" @change.debounce.700ms="genChanged()">
+      {% include "unattend/_sec_region.html" %}
+      {% include "unattend/_sec_setup.html" %}
+      {% include "unattend/_sec_identity.html" %}
+      {% include "unattend/_sec_accounts.html" %}
+      {% include "unattend/_sec_oobe.html" %}
+      {% include "unattend/_sec_bloatware.html" %}
+      {% include "unattend/_sec_scripts.html" %}
+      {% include "unattend/_sec_switches.html" %}
+    </div>
+
+    <div class="xl:sticky xl:top-20 xl:self-start">
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60">
+        <div class="flex items-center gap-2 border-b border-slate-800 px-4 py-2.5 text-sm">
+          <span class="font-semibold text-slate-100">Preview</span>
+          <span class="text-xs text-slate-500">rendered with sample values (hostname ND-123456)</span>
+          <span x-show="gen.busy" class="ml-auto text-xs text-slate-500">generating…</span>
+        </div>
+        <div class="space-y-2 p-3">
+          <template x-for="e in gen.errors" :key="e">
+            <p class="rounded-md border border-rose-500/40 bg-rose-950 px-3 py-2 text-xs text-rose-100" x-text="e"></p>
+          </template>
+          <template x-for="w in gen.warnings" :key="w">
+            <p class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200" x-text="w"></p>
+          </template>
+          <pre class="max-h-[calc(100vh-12rem)] overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300"
+               :class="gen.errors.length ? 'opacity-40' : ''" x-text="gen.preview || 'No preview yet.'"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+  </template>
+</div>
+
+<div x-show="gen.unavailable" x-cloak class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200" x-text="gen.unavailable"></div>
