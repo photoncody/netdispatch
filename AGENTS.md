@@ -158,7 +158,8 @@ Verified with this harness:
 - With a generated template (the generator's new-template settings, image index 1 for the LTSC evaluation ISO):
   - `win new` from the hub, and `win-sb new` through a caching relay (boot files over its HTTP cache, `install.wim` over its SMB share). In both, the generated `pe.cmd` wiped and partitioned disk 0, applied the image and rebooted; the device went `local` on its next `/boot`, and Windows reached the desktop with auto-logon as `Admin`.
   - The sanitised hostname registered in `/tmp/ndrouter.leases`: label `Gen Test 01` became `Gen-Test-01`, `SB_Test.Relay` became `SB-Test-Relay`.
-  - The WinPE stage took about 15 minutes in the first run and about 25 in the second, most of the difference between `pe.cmd` printing "Computer will now reboot" and the actual reset. The cause (Secure Boot firmware or the relay share) isn't known yet.
+  - The WinPE stage took about 15 minutes in the first run and about 25 in the second, most of the difference between `pe.cmd` printing "Computer will now reboot" and the actual reset. The cause isn't known. It isn't the relay share alone: the run below used the relay share without Secure Boot and its WinPE stage took under 9 minutes.
+  - Custom scripts and Windows settings (`win new`, relay cache): one script per phase, each requesting a marker URL from the hub so that its access log shows the script ran. All four ran: `System` in the specialize pass (with `__ND_HOSTNAME__` replaced), `FirstLogon` (with `__ND_MAC_PLAIN__` replaced, and seeing the folder the `System` script made), and `UserOnce`, which read back the value the `DefaultUser` .reg file wrote. The desktop showed `LeftTaskbar`, `HideTaskViewButton` and `taskbarSearch: Hide` applied. Not checked inside the guest: `EnableRemoteDesktop`, `ShowFileExtensions`, and app removal (the LTSC image has none of those apps).
 
 ## Core invariants (don't break these)
 
