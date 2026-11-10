@@ -30,6 +30,9 @@ from .models import (
     IsoImage,
 )
 
+# An initrd entry "{iso} <name>" loads the raw ISO into the initramfs as <name>.
+RAW_ISO_INITRD = "{iso}"
+
 _UNSAFE_TEXT = re.compile(r"[^A-Za-z0-9 ._:/@()\-+,=]")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$", re.IGNORECASE)
 _HEX = re.compile(r"[^0-9a-fA-F]")
@@ -316,6 +319,23 @@ def https_fetch_warning(cmdline: str) -> str | None:
     return None
 
 
+def raw_iso_initrd_name(entry: str) -> str | None:
+    """File name for an initrd entry ``{iso} <name>``; None for a tree path.
+
+    Such an entry loads the whole raw ISO into the initramfs under that name,
+    for installers that only look for their ISO there (Proxmox).
+    """
+    entry = (entry or "").strip()
+    if not entry.startswith(RAW_ISO_INITRD):
+        return None
+    name = re.sub(r"[^A-Za-z0-9._/-]", "", entry[len(RAW_ISO_INITRD):])
+    return name or "/image.iso"
+
+
+def uses_raw_iso_initrd(iso: IsoImage) -> bool:
+    return any(raw_iso_initrd_name(p) is not None for p in iso.initrd_paths)
+
+
 def render_cmdline(ctx: BootContext, iso: IsoImage) -> str:
     cmdline = iso.cmdline or ""
     for key, value in ctx.placeholders(iso).items():
@@ -336,6 +356,12 @@ def _linux_lines(ctx: BootContext, iso: IsoImage) -> list[str]:
         args = f"initrd=initrd.magic {args}".strip()
     lines += [f"kernel {base}/{qpath(iso.kernel_path)} {args}".rstrip() + " || goto failed"]
     for path in iso.initrd_paths:
-        lines.append(f"initrd {base}/{qpath(path)} || goto failed")
+        name = raw_iso_initrd_name(path)
+        if name is None:
+            lines.append(f"initrd {base}/{qpath(path)} || goto failed")
+        else:
+            # iPXE wraps a named initrd in a cpio header, so the kernel
+            # unpacks the raw ISO as that file in the initramfs.
+            lines.append(f"initrd {ctx.raw_url(iso)} {name} || goto failed")
     lines.append("boot || goto failed")
     return lines

@@ -354,7 +354,7 @@ At a site with a slow link to the hub, a relay can keep its own copy of the imag
 How it behaves:
 - **Machines always get an image.** Until the relay has a complete, current copy of an image, machines on that site boot it from the hub as before. The same happens if the relay is offline or its file server is down.
 - **Updates are automatic.** Re-extract or replace an image on the hub, and relays fetch only the files that changed. Meanwhile machines use the hub. Untick an image, or delete it on the hub, and relays delete their copy.
-- **What's stored** depends on the boot method: Windows Setup, WinPE and `linux` images keep their extracted files; `sanboot` and `memdisk` images keep the ISO. A `linux` image whose command line uses `{iso_url}` keeps both. That's about the ISO's size per image: a Windows ISO needs about 6 GB.
+- **What's stored** depends on the boot method: Windows Setup, WinPE and `linux` images keep their extracted files; `sanboot` and `memdisk` images keep the ISO. A `linux` image whose command line uses `{iso_url}`, or that has an `{iso}` initrd line, keeps both. That's about the ISO's size per image: a Windows ISO needs about 6 GB.
 - **Windows Setup** maps the relay's install share. If the relay reports its share down, WinPE uses the hub's share instead. If the relay's share doesn't answer, WinPE also switches to the hub's share after 3 failed attempts.
 - Kernels, initrds and ISOs come from the relay over plain HTTP, and Windows Setup uses SMB. The unattend file and the share password still come from the hub, through each deployment's one-time link.
 
@@ -391,6 +391,7 @@ Each image is then extracted, and netdispatch works out how to boot it:
 | Arch Linux | `linux` | |
 | Debian live | `linux` | |
 | Alpine | `linux` | |
+| Proxmox VE, Backup Server and Mail Gateway installers | `linux` | the whole ISO is loaded into memory: give the client at least 6 GB of RAM. Loading a direct kernel doesn't work with Secure Boot on. |
 | anything else | `sanboot` | boots the raw ISO. Works for many UEFI tools and small rescue images. |
 
 Use **Edit profile** to adjust how an image boots:
@@ -406,6 +407,8 @@ Use **Edit profile** to adjust how an image boots:
   | `{mac}`, `{hostname}`, `{ip}`, `{relay}` | values of the machine being booted |
 
   Example: add `console=ttyS0,115200` to see a Linux boot on a serial console.
+
+  An initrd line `{iso} /name` loads the whole ISO into the initramfs as the file `/name`. It's for installers that look for their ISO there and nowhere on the network. The detected Proxmox profile uses `{iso} /proxmox.iso`.
 - **Windows/WinPE:** paths to `BCD`, `boot.sdi` and `boot.wim`, and the Setup program.
 - **Re-run auto-detection** resets a profile. **Re-extract ISO** rebuilds the extracted copy.
 

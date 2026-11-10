@@ -131,6 +131,18 @@ def test_manifest_layout_follows_boot_method(client, admin, app, settings, relay
     assert doc["smb"] is None  # no Windows Setup image assigned
 
 
+def test_manifest_keeps_the_iso_for_a_raw_iso_initrd(client, admin, app, settings, relay_key):
+    pve = _add_iso(
+        app, settings, name="PVE", filename="pve.iso", boot_method="linux",
+        kernel_path="boot/linux26", initrd_paths_json='["boot/initrd.img", "{iso} /proxmox.iso"]',
+    )
+    (settings.isos_dir / "pve.iso").write_bytes(b"PVE")
+    make_tree(settings.extracted_dir / str(pve), ["boot/linux26", "boot/initrd.img"])
+    _assign(admin, pve)
+    files = [f["dest"] for f in _manifest(client, relay_key).json()["isos"][0]["files"]]
+    assert sorted(files) == [f"raw/{pve}/pve.iso", f"tree/{pve}/boot/initrd.img", f"tree/{pve}/boot/linux26"]
+
+
 @pytest.mark.parametrize(
     "paths, clash",
     [

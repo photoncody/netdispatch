@@ -51,6 +51,8 @@ from .models import (
     utcnow,
 )
 
+from .pxe_engine import uses_raw_iso_initrd
+
 log = logging.getLogger("netdispatch.relay_cache")
 
 TREE_METHODS = {BOOT_WINDOWS_SETUP, BOOT_WINPE, BOOT_LINUX}
@@ -100,7 +102,9 @@ def _needs_tree(iso: IsoImage) -> bool:
 def _needs_raw(iso: IsoImage) -> bool:
     if iso.boot_method in RAW_METHODS:
         return True
-    return iso.boot_method == BOOT_LINUX and "{iso_url}" in (iso.cmdline or "")
+    if iso.boot_method != BOOT_LINUX:
+        return False
+    return "{iso_url}" in (iso.cmdline or "") or uses_raw_iso_initrd(iso)
 
 
 def _file_entry(dest: str, src: str, path: Path) -> dict | None:
