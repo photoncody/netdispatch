@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>netdispatch-unattendgen</AssemblyName>
+    <RootNamespace>Netdispatch.UnattendGen.Cli</RootNamespace>
+    <!-- Listed so packages.lock.json covers both architectures the server image is built for. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Netdispatch.UnattendGen.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "language": {
+    "mode": "Unattended",
+    "imageLanguage": "en-US",
+    "locales": [
+      { "locale": "en-US", "keyboard": "00000409" }
+    ],
+    "geoLocation": "244"
+  },
+  "setup": {
+    "mode": "Standard",
+    "standard": {
+      "editionMode": "Edition",
+      "edition": "pro",
+      "bypassRequirementsCheck": true
+    }
+  },
+  "computerName": {
+    "mode": "Custom",
+    "name": "WIN11-LAB"
+  },
+  "accounts": {
+    "mode": "Unattended",
+    "users": [
+      { "name": "labadmin", "displayName": "Lab Administrator", "password": "change-me", "group": "Administrators" }
+    ],
+    "autoLogon": "FirstAdministrator"
+  },
+  "bypassNetworkCheck": true,
+  "bloatware": [
+    "RemoveCopilot",
+    "RemoveOutlook",
+    "RemoveTeams"
+  ],
+  "scripts": {
+    "items": [
+      { "phase": "System", "type": "Cmd", "content": "powercfg.exe /change monitor-timeout-ac 0" }
+    ]
+  }
+}

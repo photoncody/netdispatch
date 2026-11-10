@@ -1,0 +1,86 @@
+{#
+  Form controls for the unattend generator. Each macro takes Alpine expressions as plain
+  strings (no moustaches). All Tailwind classes for the generator live in these templates:
+  the Tailwind build only scans app/templates, so static/unattend-generator.js must not
+  build class names.
+#}
+
+{% macro text(model, label, placeholder='', help='', mono=False, type='text') -%}
+<label class="block text-xs uppercase tracking-wider text-slate-400">{{ label }}
+  <input type="{{ type }}" x-model="{{ model }}" placeholder="{{ placeholder }}" autocomplete="off" spellcheck="false"
+         class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none{% if mono %} font-mono{% endif %}">
+  {% if help %}<span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">{{ help }}</span>{% endif %}
+</label>
+{%- endmacro %}
+
+{% macro number(model, label, min='', max='', help='', placeholder='') -%}
+<label class="block text-xs uppercase tracking-wider text-slate-400">{{ label }}
+  <input type="number" x-model.number="{{ model }}" min="{{ min }}" max="{{ max }}" placeholder="{{ placeholder }}"
+         class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+  {% if help %}<span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">{{ help }}</span>{% endif %}
+</label>
+{%- endmacro %}
+
+{% macro checkbox(model, label, help='') -%}
+<label class="flex items-start gap-2 text-sm text-slate-200">
+  <input type="checkbox" x-model="{{ model }}" class="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500">
+  <span>{{ label }}{% if help %}<span class="block text-xs text-slate-500">{{ help }}</span>{% endif %}</span>
+</label>
+{%- endmacro %}
+
+{#- options: list of (value, label) or (value, label, help) -#}
+{% macro radios(model, options, legend='') -%}
+<fieldset class="space-y-1.5">
+  {% if legend %}<legend class="mb-1 text-xs uppercase tracking-wider text-slate-400">{{ legend }}</legend>{% endif %}
+  {% for opt in options %}
+  <label class="flex items-start gap-2 text-sm text-slate-200">
+    <input type="radio" value="{{ opt[0] }}" x-model="{{ model }}" class="mt-1 shrink-0 accent-emerald-500">
+    <span>{{ opt[1] }}{% if opt|length > 2 %}<span class="block text-xs text-slate-500">{{ opt[2] }}</span>{% endif %}</span>
+  </label>
+  {% endfor %}
+</fieldset>
+{%- endmacro %}
+
+{#- A select filled from a schema list; items have id and displayName. -#}
+{% macro select_list(model, label, items, help='', empty='') -%}
+<label class="block text-xs uppercase tracking-wider text-slate-400">{{ label }}
+  <select x-model="{{ model }}"
+          class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+    {% if empty %}<option value="">{{ empty }}</option>{% endif %}
+    <template x-for="o in {{ items }}" :key="o.id">
+      <option :value="o.id" x-text="o.displayName" :selected="o.id === {{ model }}"></option>
+    </template>
+  </select>
+  {% if help %}<span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">{{ help }}</span>{% endif %}
+</label>
+{%- endmacro %}
+
+{% macro textarea(model, label, rows=6, help='', placeholder='') -%}
+<label class="block text-xs uppercase tracking-wider text-slate-400">{{ label }}
+  <textarea x-model="{{ model }}" rows="{{ rows }}" spellcheck="false" placeholder="{{ placeholder }}"
+            class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 p-2 font-mono text-xs normal-case leading-relaxed tracking-normal text-slate-200 focus:border-emerald-500 focus:outline-none"></textarea>
+  {% if help %}<span class="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">{{ help }}</span>{% endif %}
+</label>
+{%- endmacro %}
+
+{#- A collapsible form section. Use with call: the caller block is the body. -#}
+{% macro section(id, title, summary_expr='') -%}
+<details id="gen-{{ id }}" open class="group rounded-lg border border-slate-800 bg-slate-900/60">
+  <summary class="flex cursor-pointer select-none items-center gap-2 px-4 py-2.5 text-sm font-semibold text-slate-100 hover:text-white">
+    <span class="text-slate-500 transition group-open:rotate-90">▸</span>
+    <span>{{ title }}</span>
+    {% if summary_expr %}<span class="ml-auto truncate text-xs font-normal text-slate-500" x-text="{{ summary_expr }}"></span>{% endif %}
+  </summary>
+  <div class="space-y-4 border-t border-slate-800 px-4 py-4">
+    {{ caller() }}
+  </div>
+</details>
+{%- endmacro %}
+
+{% macro note(text, tone='slate') -%}
+{% if tone == 'amber' %}
+<p class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{{ text }}</p>
+{% else %}
+<p class="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-400">{{ text }}</p>
+{% endif %}
+{%- endmacro %}

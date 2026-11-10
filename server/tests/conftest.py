@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.models import ISO_READY, IsoImage
+
+# The unattend generator program, installed in the server image (see server/unattendgen).
+UNATTENDGEN = Path(os.environ.get("UNATTENDGEN_PATH", "/opt/netdispatch/netdispatch-unattendgen"))
 
 ADMIN_PW = "test-admin-pw"
 BOOTSTRAP_KEY = "bootstrap-relay-key"
@@ -28,10 +32,22 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         smb_password="smb-pw%1",
         wimboot_path=wimboot,
         memdisk_path=tmp_path / "memdisk-missing",
+        unattendgen_path=UNATTENDGEN,
         _env_file=None,
     )
     values.update(overrides)
     return Settings(**values)
+
+
+@pytest.fixture
+def unattendgen():
+    """Skip unless the real unattend generator is installed. In the Docker test stage
+    NETDISPATCH_REQUIRE_UNATTENDGEN=1 turns the skip into a failure."""
+    if not (UNATTENDGEN.is_file() and os.access(UNATTENDGEN, os.X_OK)):
+        if os.environ.get("NETDISPATCH_REQUIRE_UNATTENDGEN") == "1":
+            pytest.fail(f"unattend generator missing at {UNATTENDGEN}")
+        pytest.skip(f"unattend generator not installed at {UNATTENDGEN}")
+    return UNATTENDGEN
 
 
 @pytest.fixture

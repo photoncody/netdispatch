@@ -3,6 +3,7 @@
 # netdispatch central server (hub)
 #   target "runtime" (default, last stage) - production image
 #   target "test"                          - runtime + pytest:  docker build --target test server/
+#   target "unattendgen-test"              - builds and runs the unattend generator's .NET tests
 
 # ---------------------------------------------------------------- assets
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS assets
@@ -38,6 +39,48 @@ COPY tailwind ./tailwind
 COPY app/templates ./app/templates
 RUN tailwindcss -c tailwind.config.js -i tailwind/input.css -o /out/app.css --minify
 
+# ---------------------------------------------------------------- unattendgen
+# The unattend generator CLI (unattendgen/): the upstream library at the commit pinned in
+# unattendgen/upstream.lock, published as one self-contained file for the target architecture.
+# The SDK image is pinned by digest; to move it, pull the tag and copy the digest from
+#   docker image inspect --format '{{index .RepoDigests 0}}' mcr.microsoft.com/dotnet/sdk:10.0
+# Keep the SDK version in step with the packages.lock.json files (ILLink.Tasks tracks it).
+# mcr.microsoft.com/dotnet/sdk:10.0 (SDK 10.0.402 when pinned)
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2 AS unattendgen-base
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1
+WORKDIR /src
+COPY unattendgen/upstream.lock unattendgen/fetch-upstream.sh ./
+RUN sh fetch-upstream.sh
+COPY unattendgen/global.json unattendgen/Unattendgen.slnx ./
+COPY unattendgen/src/Directory.Build.props ./src/
+COPY unattendgen/src/Core/Netdispatch.UnattendGen.Core.csproj unattendgen/src/Core/packages.lock.json ./src/Core/
+COPY unattendgen/src/Cli/Netdispatch.UnattendGen.Cli.csproj unattendgen/src/Cli/packages.lock.json ./src/Cli/
+
+FROM unattendgen-base AS unattendgen
+# Restores for both RuntimeIdentifiers the project lists (as the lock files record), then
+# publishes for the target architecture only.
+RUN dotnet restore src/Cli/Netdispatch.UnattendGen.Cli.csproj --locked-mode -p:SelfContained=true
+COPY unattendgen/src ./src
+ARG TARGETARCH
+# Not trimmed: upstream builds types by name through Newtonsoft.Json. InvariantGlobalization is
+# set in Directory.Build.props because the python:3.12-slim runtime has no ICU.
+RUN case "$TARGETARCH" in \
+      amd64) rid=linux-x64 ;; \
+      arm64) rid=linux-arm64 ;; \
+      *) echo "unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && dotnet publish src/Cli/Netdispatch.UnattendGen.Cli.csproj --no-restore -c Release -r "$rid" \
+      --self-contained -p:PublishSingleFile=true -p:DebugType=none -o /out
+
+FROM unattendgen-base AS unattendgen-test
+COPY unattendgen/tests/Directory.Build.props ./tests/
+COPY unattendgen/tests/Tests/Netdispatch.UnattendGen.Tests.csproj unattendgen/tests/Tests/packages.lock.json ./tests/Tests/
+RUN dotnet restore Unattendgen.slnx --locked-mode
+COPY unattendgen/src ./src
+COPY unattendgen/tests ./tests
+RUN dotnet test --solution Unattendgen.slnx --no-restore -c Release
+
 # ---------------------------------------------------------------- base
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -59,11 +102,15 @@ RUN pip install -r requirements.txt
 COPY app ./app
 COPY --from=assets /out/app.css /out/alpine.min.js ./app/static/
 COPY --from=assets /out/wimboot /opt/netdispatch/wimboot
+COPY --from=unattendgen /out/netdispatch-unattendgen /opt/netdispatch/netdispatch-unattendgen
+COPY unattendgen/THIRD-PARTY-NOTICES.md /opt/netdispatch/licenses/unattendgen-THIRD-PARTY-NOTICES.md
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 # ---------------------------------------------------------------- test
 FROM base AS test
+# Tests that need the real unattend generator fail instead of skipping when it is missing.
+ENV NETDISPATCH_REQUIRE_UNATTENDGEN=1
 COPY requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
 COPY tests ./tests

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "language": {
+    "mode": "Unattended",
+    "imageLanguage": "en-US",
+    "locales": [
+      { "locale": "en-US", "keyboard": "00000409" },
+      { "locale": "de-DE", "keyboard": "00000407" }
+    ],
+    "geoLocation": "244"
+  },
+  "setup": {
+    "mode": "Scripted",
+    "scripted": {
+      "imageMode": "Edition",
+      "edition": "pro",
+      "partitioning": {
+        "mode": "Unattended",
+        "layout": "Gpt",
+        "recoveryPartition": true,
+        "targetDisk": { "mode": "Fixed", "index": 0 }
+      }
+    }
+  },
+  "computerName": {
+    "mode": "Random"
+  },
+  "accounts": {
+    "mode": "Unattended",
+    "users": [
+      { "name": "labadmin", "displayName": "Lab Administrator", "password": "change-me", "group": "Administrators" },
+      { "name": "labuser", "displayName": "Lab User", "password": "change-me-too", "group": "Users" }
+    ],
+    "autoLogon": "FirstAdministrator",
+    "obscurePasswords": true
+  },
+  "bypassNetworkCheck": true,
+  "bloatware": [
+    "RemoveBingSearch",
+    "RemoveCopilot",
+    "RemoveNews",
+    "RemoveWeather"
+  ],
+  "scripts": {
+    "items": [
+      { "phase": "FirstLogon", "type": "Ps1", "content": "Set-ItemProperty -LiteralPath 'Registry::HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name 'DisableAutomaticRestartSignOn' -Type 'DWord' -Value 1;" },
+      { "phase": "DefaultUser", "type": "Reg", "content": "[HKEY_USERS\\DefaultUser\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced]\r\n\"HideFileExt\"=dword:00000000" }
+    ]
+  }
+}

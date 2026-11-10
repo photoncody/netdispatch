@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: shellcheck
-        run: shellcheck relay/*.sh samba/*.sh server/*.sh tests/e2e/*.sh
+        run: shellcheck relay/*.sh samba/*.sh server/*.sh server/unattendgen/*.sh tests/e2e/*.sh
 
       - name: Validate compose files
         run: |
@@ -53,3 +53,22 @@ jobs:
 
       - name: Run pytest
         run: docker run --rm netdispatch-test:ci python -m pytest -q -W error::DeprecationWarning tests
+
+  unattendgen:
+    name: Unattend generator tests (.NET)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile's "unattendgen-test" stage fetches the pinned upstream library,
+      # restores in locked mode and runs the xUnit tests; a failure fails the build.
+      - name: Build and test
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          target: unattendgen-test
+          cache-from: type=gha,scope=server-unattendgen
+          cache-to: type=gha,mode=max,scope=server-unattendgen

@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     # --- Bundled boot helpers ------------------------------------------
     wimboot_path: Path = Path("/opt/netdispatch/wimboot")
     memdisk_path: Path = Path("/opt/netdispatch/memdisk")
+    # Built-in unattend generator (server/unattendgen). Runs only when a template
+    # is previewed or saved in the generator, never while a device boots.
+    unattendgen_path: Path = Path("/opt/netdispatch/netdispatch-unattendgen")
+    unattendgen_timeout: float = 30.0
 
     @field_validator("public_url", "boot_base_url", "linux_fetch_url")
     @classmethod

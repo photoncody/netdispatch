@@ -25,6 +25,7 @@ from .iso_tools import ExtractionManager, recover_on_startup
 from .relay_cache import ManifestCache
 from .routers import boot, devices, files, isos, relays, ui, unattend
 from .unattend import sync_from_disk
+from .unattend_generator import UnattendGenerator
 
 APP_DIR = Path(__file__).resolve().parent
 log = logging.getLogger("netdispatch")
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.sessionmaker = session_factory
     app.state.extractor = extractor
     app.state.manifests = ManifestCache()
+    app.state.unattend_generator = UnattendGenerator(settings.unattendgen_path, settings.unattendgen_timeout)
     app.state.templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
     # Cache-buster for /static assets: changes whenever the image is rebuilt.
     css = APP_DIR / "static" / "app.css"

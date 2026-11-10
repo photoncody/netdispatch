@@ -100,6 +100,7 @@ services:
       # RELAY_BUILD_CONTEXT: https://github.com/photoncody/netdispatch.git#main:relay
       # WAIT_POLL_SECONDS: "5"
       # DEVICE_OFFLINE_SECONDS: "60"
+      # UNATTENDGEN_TIMEOUT: "30"     # seconds the unattend generator may take per preview/save
     ports:
       - "8000:8000"
     volumes:

@@ -1,0 +1,43 @@
+{% from "unattend/_macros.html" import radios, select_list, section %}
+{% call section('region', 'Language and region', "gen.f.lang.mode === 'Unattended' ? gen.f.lang.imageLanguage + ', ' + gen.f.lang.locales.map(l => l.locale).join(' / ') : 'chosen during Setup'") %}
+  {{ radios('gen.f.lang.mode', [
+      ('Unattended', 'Set them in the answer file'),
+      ('Interactive', 'Choose them during Setup'),
+  ]) }}
+  <template x-if="gen.f.lang.mode === 'Unattended'">
+    <div class="space-y-3">
+      <div class="grid gap-3 sm:grid-cols-2">
+        {{ select_list('gen.f.lang.imageLanguage', 'Windows display language', 'gen.schema.imageLanguages',
+                       help='Must be a language the install image contains.') }}
+        {{ select_list('gen.f.lang.geoLocation', 'Home location', 'gen.schema.geoLocations') }}
+      </div>
+      <div class="space-y-2">
+        <div class="text-xs uppercase tracking-wider text-slate-400">Formats and keyboard layouts <span class="normal-case tracking-normal text-slate-500">(1 to 3; the first is the default)</span></div>
+        <template x-for="(pair, i) in gen.f.lang.locales" :key="pair._k">
+          <div class="flex flex-wrap items-end gap-2">
+            <label class="min-w-0 flex-1 basis-48 text-xs uppercase tracking-wider text-slate-400">Formats
+              <select x-model="pair.locale" @change="genLocaleChanged(pair)"
+                      class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+                <template x-for="o in gen.schema.userLocales" :key="o.id">
+                  <option :value="o.id" x-text="o.displayName" :selected="o.id === pair.locale"></option>
+                </template>
+              </select>
+            </label>
+            <label class="min-w-0 flex-1 basis-48 text-xs uppercase tracking-wider text-slate-400">Keyboard
+              <select x-model="pair.keyboard"
+                      class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+                <template x-for="o in gen.schema.keyboards" :key="o.id">
+                  <option :value="o.id" x-text="o.displayName" :selected="o.id === pair.keyboard"></option>
+                </template>
+              </select>
+            </label>
+            <button type="button" x-show="gen.f.lang.locales.length > 1" @click="genRemove(gen.f.lang.locales, i)"
+                    class="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-400 hover:border-rose-400 hover:text-rose-300" title="Remove">✕</button>
+          </div>
+        </template>
+        <button type="button" x-show="gen.f.lang.locales.length < 3" @click="genAddLocale()"
+                class="rounded-md border border-dashed border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 hover:text-slate-200">+ Add a layout</button>
+      </div>
+    </div>
+  </template>
+{% endcall %}

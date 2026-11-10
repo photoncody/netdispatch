@@ -31,7 +31,7 @@ Boot chain:
 |---|---|
 | `server/app/main.py` | `create_app(settings)` factory: middleware order, routers, `asset_version` |
 | `server/app/config.py` | `Settings` (pydantic-settings). All config comes from env vars, nothing else. |
-| `server/app/models.py` | `Relay`, `Device`, `IsoImage`, `UnattendConfig`, `RelayCache`, `RelayCacheItem`, plus state/method constants |
+| `server/app/models.py` | `Relay`, `Device`, `IsoImage`, `UnattendConfig`, `UnattendGenerated`, `RelayCache`, `RelayCacheItem`, plus state/method constants |
 | `server/app/auth.py` | pure-ASGI `AuthMiddleware` (exemptions + CSRF header), OIDC routes, local login, rate limit |
 | `server/app/pxe_engine.py` | **all iPXE script text**: wait, local, payload (wimboot/linux/sanboot/memdisk) |
 | `server/app/routers/boot.py` | `/boot` state machine |
@@ -39,7 +39,11 @@ Boot chain:
 | `server/app/iso_tools.py` | 7-Zip extraction (background threads), layout detection, `resolve_ci()` safe paths |
 | `server/app/relay_cache.py` | relay cache: per-image manifests + etags (`ManifestCache`), `usable_cache()` routing decision, heartbeat cache reports |
 | `server/app/winpe.py` | `winpeshl.ini` + `netdispatch.cmd` (net use + `setup.exe /unattend`) |
-| `server/app/unattend.py` | template files in `data/configs`, sandboxed Jinja rendering, XML validation |
+| `server/app/unattend.py` | template files in `data/configs`, sandboxed Jinja rendering (CRLF kept), XML validation, `computer_name()` for `{{ hostname }}` |
+| `server/app/unattend_generator.py` | runs `netdispatch-unattendgen`, escapes its XML for Jinja, swaps `__ND_*__` placeholders for template variables, `NEW_TEMPLATE_SETTINGS` |
+| `server/app/templates/unattend/` | the generator form: `_generator.html`, one `_sec_*.html` per section, `_macros.html` for the controls |
+| `server/app/static/unattend-generator.js` | the generator's Alpine state and methods, spread into `netdispatch()`; form state ↔ settings JSON |
+| `server/unattendgen/` | .NET 10 wrapper around the upstream unattend-generator library: `src/Core` (settings model `HostConfig`, mapper, validator, `CliCommands`), `src/Cli` (`netdispatch-unattendgen`), `tests/Tests` (xUnit, golden files), `upstream.lock` + `fetch-upstream.sh` (pinned upstream) |
 | `server/app/templates/` | `index.html` (whole SPA), `login.html` |
 | `server/tests/` | pytest (unit + TestClient integration) |
 | `relay/entrypoint.sh` | env validation, interface/subnet detection, writes `dnsmasq.conf` + `/tftp/netdispatch.ipxe` (+ lighttpd config with `RELAY_CACHE=true`) |
@@ -65,13 +69,20 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml --profile local
 
 `docker-compose.yml` and `docker-compose.relay.yml` are the user-facing files: they run the published `ghcr.io/photoncody/netdispatch-*:latest` images and hold every setting inline, so users download just the file without cloning. `docker-compose.build.yml` is the development override that swaps in local builds tagged `netdispatch-<name>:local`. Don't add `build:` back to the user-facing files: it breaks them for anyone without a checkout.
 
-The server Dockerfile has three stages: `assets` (Tailwind CLI, Alpine.js, wimboot, each SHA-pinned), `test`, and `runtime`. `runtime` is the last stage and therefore the default target. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
+The server Dockerfile's stages:
+- `assets`: Tailwind CLI, Alpine.js and wimboot, each SHA-pinned.
+- `unattendgen-base` / `unattendgen`: the .NET SDK (pinned by digest) fetches the upstream library and publishes `netdispatch-unattendgen` as one self-contained file for the target architecture. It cross-compiles on the build platform, so arm64 needs no emulation.
+- `unattendgen-test`: runs the generator's .NET tests. CI builds it; the runtime image does not depend on it.
+- `test` and `runtime`. `runtime` is the last stage and therefore the default target.
+
+The generator's .NET tests on their own: `docker build --target unattendgen-test server/`. On a machine with the .NET 10 SDK: `server/unattendgen/fetch-upstream.sh && dotnet test --solution server/unattendgen/Unattendgen.slnx`. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
 
 ### CI (GitHub Actions, target under 5 minutes per run)
 
 - **`.github/workflows/ci.yml`**
   - `shellcheck` on every shell script, and `docker compose config` on both compose files.
   - pytest inside the Dockerfile's `test` stage, with the GHA layer cache, run with `-W error::DeprecationWarning`.
+  - The unattend generator's .NET tests: the Dockerfile's `unattendgen-test` stage, which fails the build on a failing test.
 - **`.github/workflows/images.yml`** builds `server`, `relay` and `samba` for amd64 and arm64.
   - Each architecture builds on **native** runners (`ubuntu-24.04` / `ubuntu-24.04-arm`). There's no QEMU emulation, so it stays fast.
   - Each build job pushes a per-architecture digest. The `Publish to GHCR` job then merges them into multi-arch tags on `ghcr.io/<owner>/netdispatch-<image>`:
@@ -144,6 +155,10 @@ Verified with this harness:
   - Windows Setup over the relay's SMB share, unattended through to the registered hostname;
   - the fallback to the hub while an image is re-extracted;
   - WinPE's switch from an unreachable relay share to the hub's (`:use_hub`). The relay's port 445 was rejected (`iptables -I INPUT -d 10.77.0.2 -p tcp --dport 445 -j REJECT --reject-with tcp-reset`) and the client was `win-sb`. WinPE tried the relay 3 times, printed diagnostics, switched to the hub's share and started Setup. Before the copy fix (see "`netdispatch.cmd` runs from a copy" under Gotchas), WinPE rebooted before attempt 3.
+- With a generated template (the generator's new-template settings, image index 1 for the LTSC evaluation ISO):
+  - `win new` from the hub, and `win-sb new` through a caching relay (boot files over its HTTP cache, `install.wim` over its SMB share). In both, the generated `pe.cmd` wiped and partitioned disk 0, applied the image and rebooted; the device went `local` on its next `/boot`, and Windows reached the desktop with auto-logon as `Admin`.
+  - The sanitised hostname registered in `/tmp/ndrouter.leases`: label `Gen Test 01` became `Gen-Test-01`, `SB_Test.Relay` became `SB-Test-Relay`.
+  - The WinPE stage took about 15 minutes in the first run and about 25 in the second, most of the difference between `pe.cmd` printing "Computer will now reboot" and the actual reset. The cause (Secure Boot firmware or the relay share) isn't known yet.
 
 ## Core invariants (don't break these)
 
@@ -251,6 +266,28 @@ Verified with this harness:
 - **Tailwind is compiled at image build** from `app/templates/**/*.html`. Class names must appear literally in templates; build them as complete strings, never by concatenation. There's no runtime CDN, so the hub works offline.
 - **Static URLs carry `?v={{ asset_version }}`** (the CSS mtime) to bust browser caches after rebuilds.
 - **Tabs follow `location.hash`**, and there's a `hashchange` listener.
+- **The generator form is in `templates/unattend/`, included outside the raw block.** Its partials must not contain `{{ … }}` other than the macros' own: Alpine needs no moustaches. Its JS is `static/unattend-generator.js`, which Tailwind does not scan, so it must not build class names.
+- **Alpine evaluates expressions inside `x-show` even while hidden.** Anything reading `gen.f` sits inside `<template x-if="gen.f">`.
+
+**Unattend generator**
+- **Where it runs.** `netdispatch-unattendgen` runs only on preview and save. `/files/d/{token}/autounattend.xml` serves the saved file and never starts it, so deployments don't depend on the program.
+- **The settings format is ours (`HostConfig`), not upstream's `Configuration`.** It is mapped by hand in `ConfigurationMapper`, so an upstream rename is a compile error at the pin bump rather than a silent change to stored settings. The roughly 40 plain on/off settings are the exception: they go by upstream's own names through `HostConfig.Flags` (`UpstreamFlags`, by reflection over the constructor), so new upstream switches work, and show in the form under "More Windows settings", without code changes.
+- **Inactive modes are rejected.** The validator rejects any field of a mode that isn't selected, for example `timeZone.id` with `mode: Implicit`. `genSettings()` in the JS sends only the selected modes' fields, while the form keeps the rest.
+- **Two upstream build details matter.**
+  - The assembly name must stay `UnattendGenerator`: `Bloatware.json` names types by assembly, and resources are embedded.
+  - The commit reaches `BuildInfo` through the `SourceRevisionId` that `fetch-upstream.sh` writes into upstream's folder, because the archive has no `.git`.
+- **The library writes CRLF.** Templates with CRLF are read with `newline=""` and rendered with `newline_sequence="\r\n"`, so the `.cmd` files embedded in the XML keep CRLF. A raw edit from the browser (LF) to a file that had CRLF is converted back.
+- **Jinja escaping.** `to_template()` escapes every `{` that opens a Jinja tag (`{{`, `{%`, `{#`) as `{{ "{" }}`, then swaps the placeholders. Placeholders are at least as long as their longest value, because of the library's length-limited commands. `__ND_HOSTNAME__` is exactly 15 characters, so it passes upstream's computer-name check.
+- **`InvariantGlobalization`** is on because `python:3.12-slim` has no ICU. Not trimmed, because Newtonsoft creates types by name.
+- **Lock files.** `EnableSingleFileAnalyzer` is off, so `packages.lock.json` doesn't gain an implicit ILLink reference when publishing single-file. The CLI lists both `RuntimeIdentifiers`, and Docker restores without `-r` so the lock file matches.
+- **Pin bump:**
+  1. Set `UPSTREAM_COMMIT`, `UPSTREAM_DATE` and `UPSTREAM_SHA256` in `server/unattendgen/upstream.lock`. Get the hash with `curl -fsSL https://github.com/cschneegans/unattend-generator/archive/<commit>.tar.gz | sha256sum`.
+  2. Run the .NET tests. A golden-file failure means the output changed: rewrite the baselines with `UNATTENDHOST_UPDATE_BASELINES=1`, review `git diff` of `tests/Tests/fixtures/baselines/`, and commit them with the bump.
+  3. Run the pytest suite.
+  4. If `modifier/Disk.cs` changed, run the QEMU `win new` test with a generated template.
+
+  Templates saved with an older commit keep their file and are flagged `stale` until saved again.
+- **Stored settings.** They hold account passwords in plain text, the same exposure as the XML in `data/configs`. Rows are deleted explicitly with their template.
 
 **Ops / tooling**
 - **Shell scripts must be LF** (`.gitattributes`). A CRLF entrypoint fails with a confusing `not found` error.

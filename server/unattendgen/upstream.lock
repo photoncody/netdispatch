@@ -1,0 +1,7 @@
+# The upstream library (https://github.com/cschneegans/unattend-generator) this build uses.
+# Read by fetch-upstream.sh, which the server Dockerfile runs. Upstream publishes no releases,
+# so the pin is a commit plus the SHA-256 of GitHub's archive of it. See README.md in this
+# folder before changing it.
+UPSTREAM_COMMIT=8fdf1b99af95977ea38f4922662964dc6324b0df
+UPSTREAM_DATE=2026-11-06
+UPSTREAM_SHA256=c5eeed4ae379b0602da68c2ec7484b0308b9bb58d1a226eb065cf4984fed189c

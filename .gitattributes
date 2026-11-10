@@ -5,3 +5,5 @@
 *.h text eol=lf
 Dockerfile text eol=lf
 *.yml text eol=lf
+# Unattend generator baselines are compared byte for byte and keep upstream's CRLF line endings.
+server/unattendgen/tests/Tests/fixtures/baselines/*.xml -text

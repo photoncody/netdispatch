@@ -1,0 +1,37 @@
+{% from "unattend/_macros.html" import checkbox, note, section %}
+{% call section('scripts', 'Custom scripts', "gen.f.scripts.items.length ? gen.f.scripts.items.length + ' script(s)' : 'none'") %}
+  {{ note('Write __ND_HOSTNAME__ or __ND_MAC_PLAIN__ in a script to get the device\'s hostname or MAC address (12 hex digits) when it downloads the answer file.') }}
+  <div class="space-y-2">
+    <template x-for="(sc, i) in gen.f.scripts.items" :key="sc._k">
+      <div class="space-y-2 rounded-md border border-slate-800 bg-slate-950/50 p-2">
+        <div class="flex flex-wrap items-end gap-2">
+          <label class="min-w-0 flex-1 basis-56 text-xs uppercase tracking-wider text-slate-400">When
+            <select x-model="sc.phase"
+                    class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+              <option value="System">During installation, as SYSTEM (before accounts exist)</option>
+              <option value="DefaultUser">Into the default user profile (registry)</option>
+              <option value="FirstLogon">At the first logon, as SYSTEM</option>
+              <option value="UserOnce">At each user's first logon, as that user</option>
+            </select>
+          </label>
+          <label class="w-32 text-xs uppercase tracking-wider text-slate-400">Type
+            <select x-model="sc.type"
+                    class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+              <option value="Ps1">PowerShell</option>
+              <option value="Cmd">.cmd</option>
+              <option value="Reg">.reg</option>
+              <option value="Vbs" :disabled="sc.phase === 'DefaultUser'">VBScript</option>
+            </select>
+          </label>
+          <button type="button" @click="genRemove(gen.f.scripts.items, i)"
+                  class="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-400 hover:border-rose-400 hover:text-rose-300" title="Remove">✕</button>
+        </div>
+        <textarea x-model="sc.content" rows="5" spellcheck="false"
+                  class="block w-full rounded-md border border-slate-700 bg-slate-950 p-2 font-mono text-xs leading-relaxed text-slate-200 focus:border-emerald-500 focus:outline-none"></textarea>
+      </div>
+    </template>
+    <button type="button" @click="genAddScript()"
+            class="rounded-md border border-dashed border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 hover:text-slate-200">+ Add a script</button>
+  </div>
+  {{ checkbox('gen.f.scripts.restartExplorer', 'Restart Explorer after the per-user scripts', help='So that changes they make to the taskbar or Explorer show at once.') }}
+{% endcall %}

@@ -3,6 +3,9 @@
 Templates live as files in ``<data_dir>/configs`` (so they can be edited or
 dropped in directly) and are indexed in the database. They are rendered with
 a sandboxed Jinja2 environment; values are XML-escaped.
+
+Line endings are kept: a template with CRLF line endings (such as one from the
+generator, whose embedded .cmd scripts need them) renders with CRLF.
 """
 
 from __future__ import annotations
@@ -19,13 +22,16 @@ from .config import Settings
 from .models import Device, UnattendConfig
 
 _env = SandboxedEnvironment(autoescape=True, keep_trailing_newline=True)
+_env_crlf = SandboxedEnvironment(autoescape=True, keep_trailing_newline=True, newline_sequence="\r\n")
 _SLUG = re.compile(r"[^a-z0-9]+")
+_HOSTNAME_INVALID = re.compile(r"[^A-Za-z0-9-]+")
 
 TEMPLATE_VARIABLES = {
     "mac": "aa:bb:cc:dd:ee:ff",
     "mac_dash": "AA-BB-CC-DD-EE-FF",
     "mac_plain": "AABBCCDDEEFF",
-    "hostname": "device label, or ND-<last 6 MAC hex digits> (max 15 chars)",
+    "hostname": "device label as a valid computer name (letters, digits, hyphens; max 15 chars), "
+    "or ND-<last 6 MAC hex digits>",
     "ip": "client IP reported at boot",
     "relay": "relay ID the client booted through",
     "image": "name of the dispatched image",
@@ -43,14 +49,34 @@ def template_path(settings: Settings, cfg: UnattendConfig) -> Path:
 
 def read_template(settings: Settings, cfg: UnattendConfig) -> str | None:
     try:
-        return template_path(settings, cfg).read_text(encoding="utf-8")
+        # newline="": keep CRLF as written.
+        with template_path(settings, cfg).open(encoding="utf-8", newline="") as f:
+            return f.read()
     except FileNotFoundError:
         return None
 
 
+def write_template(settings: Settings, cfg: UnattendConfig, content: str) -> None:
+    with template_path(settings, cfg).open("w", encoding="utf-8", newline="") as f:
+        f.write(content)
+
+
+def computer_name(label: str | None, mac: str) -> str:
+    """A valid Windows computer name for a device.
+
+    The label with every run of other characters turned into a hyphen, cut to 15
+    characters. Falls back to ND-<last 6 MAC hex digits> when nothing usable is
+    left or the result is all digits (Windows rejects both).
+    """
+    name = _HOSTNAME_INVALID.sub("-", label or "").strip("-")[:15].rstrip("-")
+    if not name or name.isdigit():
+        name = f"ND-{mac.replace(':', '').upper()[-6:]}"
+    return name
+
+
 def device_context(device: Device) -> dict[str, str]:
     hexmac = device.mac.replace(":", "").upper()
-    hostname = (device.label or f"ND-{hexmac[-6:]}")[:15]
+    hostname = computer_name(device.label, device.mac)
     return {
         "mac": device.mac,
         "mac_dash": "-".join(hexmac[i : i + 2] for i in range(0, 12, 2)),
@@ -75,7 +101,8 @@ def sample_context() -> dict[str, str]:
 
 
 def render(content: str, context: dict[str, str]) -> str:
-    return _env.from_string(content).render(**context)
+    env = _env_crlf if "\r\n" in content else _env
+    return env.from_string(content).render(**context)
 
 
 def validate(content: str) -> str | None:
