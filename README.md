@@ -453,7 +453,7 @@ The form covers:
 - the computer name and time zone;
 - user accounts, password expiry and account lockout;
 - app removal and custom scripts for each phase;
-- every other on/off setting the library offers.
+- optional Windows settings, in groups: File Explorer, Start menu and taskbar, system, Windows Update, security, Microsoft Edge and virtual machine tools.
 
 How generated templates behave:
 - **Editing:** a generated template opens in the form again. Its XML is rewritten whenever you save it, so you can't edit the XML directly.

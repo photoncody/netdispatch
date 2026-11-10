@@ -115,6 +115,37 @@ public class GenerationServiceTests
         Assert.DoesNotContain("BypassTPMCheck", withoutBypass);
     }
 
+    [Theory]
+    [InlineData(HiddenFilesMode.Default, false, false)]
+    [InlineData(HiddenFilesMode.ShowHidden, true, false)]
+    [InlineData(HiddenFilesMode.ShowAll, true, true)]
+    public void HiddenFiles_SetExplorerValuesForNewProfiles(HiddenFilesMode mode, bool hidden, bool system)
+    {
+        string xml = GenerateText(new HostConfig { HiddenFiles = mode });
+
+        Assert.Equal(hidden, xml.Contains(@"/v ""Hidden"" /t REG_DWORD /d 1"));
+        Assert.Equal(system, xml.Contains(@"/v ""ShowSuperHidden"" /t REG_DWORD /d 1"));
+    }
+
+    [Theory]
+    [InlineData(TaskbarSearchMode.Box, null)]
+    [InlineData(TaskbarSearchMode.Hide, 0)]
+    [InlineData(TaskbarSearchMode.Icon, 1)]
+    [InlineData(TaskbarSearchMode.Label, 3)]
+    public void TaskbarSearch_WritesTheModeUnlessItIsTheDefault(TaskbarSearchMode mode, int? value)
+    {
+        string xml = GenerateText(new HostConfig { TaskbarSearch = mode });
+
+        if (value is null)
+        {
+            Assert.DoesNotContain("SearchboxTaskbarMode", xml);
+        }
+        else
+        {
+            Assert.Contains($"-Name 'SearchboxTaskbarMode' -Type 'DWord' -Value {value};", xml);
+        }
+    }
+
     [Fact]
     public void CustomScript_IsEmbedded()
     {

@@ -29,10 +29,69 @@ function unattendGenerator() {
     genSections: [
       ['region', 'Language'], ['setup', 'PE stage'], ['identity', 'Name and time zone'],
       ['accounts', 'Accounts'], ['oobe', 'Setup experience'], ['bloatware', 'Apps'],
-      ['scripts', 'Scripts'], ['switches', 'More settings'],
+      ['scripts', 'Scripts'], ['switches', 'Windows settings'],
     ],
     // Flags that have a place of their own in the form ("Setup experience").
     genPlacedFlags: ['HidePowerShellWindows', 'UseNarrator'],
+    // Labels for the generator's on/off settings, by group: [name, label, help]. The group
+    // titles are in templates/unattend/_sec_switches.html. A flag the generator lists that is
+    // missing here shows under "Other" with its own name, so a pin bump needs no change.
+    genFlagGroups: {
+      explorer: [
+        ['ShowFileExtensions', 'Show file name extensions'],
+        ['LaunchToThisPC', 'Open File Explorer at This PC'],
+        ['ClassicContextMenu', 'Use the classic right-click menu', 'Windows 11.'],
+        ['HideInfoTip', 'No pop-up descriptions for files and folders'],
+      ],
+      taskbar: [
+        ['LeftTaskbar', 'Align the taskbar to the left'],
+        ['HideTaskViewButton', 'Hide the Task View button'],
+        ['ShowAllTrayIcons', 'Always show all tray icons'],
+        ['ShowEndTask', 'Add "End task" to the taskbar right-click menu'],
+        ['DisableWidgets', 'Turn off widgets'],
+        ['DisableBingResults', 'No web results in Start menu search'],
+        ['DisableAppSuggestions', 'No suggested or promoted apps'],
+      ],
+      system: [
+        ['EnableRemoteDesktop', 'Turn on Remote Desktop'],
+        ['EnableLongPaths', 'Allow paths longer than 260 characters'],
+        ['AllowPowerShellScripts', 'Allow PowerShell scripts to run', 'Sets the execution policy to RemoteSigned.'],
+        ['DisableFastStartup', 'Turn off fast startup'],
+        ['DisableSystemRestore', 'Turn off System Restore'],
+        ['DisableLastAccess', 'Don\'t record when files were last read'],
+        ['TurnOffSystemSounds', 'Turn off system sounds'],
+        ['DisablePointerPrecision', 'Turn off mouse acceleration'],
+        ['DisableAutomaticRestartSignOn', 'Don\'t sign the user back in after an update restart'],
+        ['PreventDeviceApps', 'Don\'t download device makers\' apps', 'Windows otherwise installs them with some drivers.'],
+        ['DisableWpbt', 'Don\'t run software stored in the firmware', 'Blocks the Windows Platform Binary Table.'],
+        ['DeleteJunctions', 'Delete the compatibility links', 'Such as C:\\Documents and Settings.'],
+        ['DeleteWindowsOld', 'Delete C:\\Windows.old'],
+      ],
+      update: [
+        ['PreventAutomaticReboot', 'Don\'t restart for updates while someone is signed in'],
+        ['DisableWindowsUpdate', 'Keep Windows Update paused', 'A daily task extends the pause by a week.'],
+      ],
+      security: [
+        ['DisableUac', 'Turn off User Account Control'],
+        ['DisableSmartScreen', 'Turn off SmartScreen'],
+        ['DisableSac', 'Turn off Smart App Control'],
+        ['DisableCoreIsolation', 'Turn off core isolation', 'Memory integrity and virtualisation-based security.'],
+        ['PreventDeviceEncryption', 'Don\'t encrypt the disk automatically', 'Stops BitLocker device encryption from starting by itself.'],
+        ['HardenSystemDriveAcl', 'Stop ordinary users creating folders in C:\\', 'This one tightens security.'],
+      ],
+      edge: [
+        ['HideEdgeFre', 'Skip Edge\'s first-run screens'],
+        ['DisableEdgeStartupBoost', 'No Edge startup boost or background running'],
+        ['DeleteEdgeDesktopIcon', 'Remove the Edge desktop shortcut'],
+        ['MakeEdgeUninstallable', 'Allow Edge to be uninstalled'],
+      ],
+      vm: [
+        ['VirtIoGuestTools', 'VirtIO guest tools and QEMU guest agent'],
+        ['VBoxGuestAdditions', 'VirtualBox Guest Additions'],
+        ['VMwareTools', 'VMware Tools'],
+        ['ParallelsTools', 'Parallels Tools'],
+      ],
+    },
 
     async genLoadSchema() {
       if (this.gen.schema.loaded) return true;
@@ -182,6 +241,8 @@ function unattendGenerator() {
         },
         wifi: { mode: (m.wifi && m.wifi.mode) || 'Interactive' },
         expressSettings: m.expressSettings || 'DisableAll',
+        hiddenFiles: m.hiddenFiles || 'Default',
+        taskbarSearch: m.taskbarSearch || 'Box',
         keepSensitiveFiles: !!m.keepSensitiveFiles,
         bypassNetworkCheck: !!m.bypassNetworkCheck,
         flags,
@@ -280,6 +341,8 @@ function unattendGenerator() {
       }
       s.wifi = { mode: f.wifi.mode };
       s.expressSettings = f.expressSettings;
+      if (f.hiddenFiles !== 'Default') s.hiddenFiles = f.hiddenFiles;
+      if (f.taskbarSearch !== 'Box') s.taskbarSearch = f.taskbarSearch;
       if (f.keepSensitiveFiles) s.keepSensitiveFiles = true;
       if (f.bypassNetworkCheck) s.bypassNetworkCheck = true;
 
@@ -315,15 +378,26 @@ function unattendGenerator() {
       list.splice(i, 1);
       this.genChanged();
     },
-    genOtherFlags() {
-      return this.gen.schema.flags.filter((fl) => !this.genPlacedFlags.includes(fl.name));
+    // The flags of one group that this generator build has, as { name, label, help }.
+    // "other" is every flag without a label here and without a place elsewhere in the form.
+    genGroupFlags(group) {
+      const have = new Set(this.gen.schema.flags.map((fl) => fl.name));
+      if (group !== 'other') {
+        return (this.genFlagGroups[group] || []).filter((x) => have.has(x[0]))
+          .map(([name, label, help]) => ({ name, label, help: help || '' }));
+      }
+      const known = new Set(this.genPlacedFlags);
+      for (const list of Object.values(this.genFlagGroups)) for (const x of list) known.add(x[0]);
+      return this.gen.schema.flags.filter((fl) => !known.has(fl.name))
+        .map((fl) => ({ name: fl.name, label: fl.name.replace(/([a-z0-9])([A-Z])/g, '$1 $2'), help: '' }));
     },
-    genFlagLabel(name) {
-      return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-    },
+    // How many settings in the "Windows settings" section differ from the defaults.
     genFlagCount() {
-      if (!this.gen.f) return 0;
-      return this.genOtherFlags().filter((fl) => !!this.gen.f.flags[fl.name] !== fl.default).length;
+      const f = this.gen.f;
+      if (!f) return 0;
+      const flags = this.gen.schema.flags
+        .filter((fl) => !this.genPlacedFlags.includes(fl.name) && !!f.flags[fl.name] !== fl.default).length;
+      return flags + (f.hiddenFiles !== 'Default' ? 1 : 0) + (f.taskbarSearch !== 'Box' ? 1 : 0);
     },
 
     // ------------------------------------------------------------ server

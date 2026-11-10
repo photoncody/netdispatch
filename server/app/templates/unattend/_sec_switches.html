@@ -1,12 +1,63 @@
-{% from "unattend/_macros.html" import note, section %}
-{% call section('switches', 'More Windows settings', "genFlagCount() ? genFlagCount() + ' changed' : 'defaults'") %}
-  {{ note('Every on/off setting the generator offers, by its own name. Settings left as they are keep Windows\' behaviour.') }}
-  <div class="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-    <template x-for="fl in genOtherFlags()" :key="fl.name">
-      <label class="flex items-center gap-2 text-sm text-slate-200" :title="fl.name">
-        <input type="checkbox" x-model="gen.f.flags[fl.name]" class="h-4 w-4 shrink-0 accent-emerald-500">
-        <span x-text="genFlagLabel(fl.name)"></span>
+{% from "unattend/_macros.html" import note, radios, section %}
+
+{#- One titled group of on/off settings. The labels come from genFlagGroups in unattend-generator.js. -#}
+{% macro flag_group(id, title, caller_first=False) -%}
+<div class="space-y-2">
+  <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">{{ title }}</h4>
+  {% if caller and caller_first %}{{ caller() }}{% endif %}
+  <div class="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+    <template x-for="fl in genGroupFlags('{{ id }}')" :key="fl.name">
+      <label class="flex items-start gap-2 text-sm text-slate-200" :title="fl.name">
+        <input type="checkbox" x-model="gen.f.flags[fl.name]" class="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500">
+        <span><span x-text="fl.label"></span><span class="block text-xs text-slate-500" x-show="fl.help" x-text="fl.help"></span></span>
       </label>
     </template>
+  </div>
+  {% if caller and not caller_first %}{{ caller() }}{% endif %}
+</div>
+{%- endmacro %}
+
+{% call section('switches', 'Windows settings', "genFlagCount() ? genFlagCount() + ' changed' : 'defaults'") %}
+  {{ note('Everything here is optional. A setting you leave alone keeps Windows\' own behaviour.') }}
+
+  {% call flag_group('explorer', 'File Explorer') %}
+    {{ radios('gen.f.hiddenFiles', [
+        ('Default', 'Keep hidden files hidden'),
+        ('ShowHidden', 'Show hidden files'),
+        ('ShowAll', 'Show hidden files and protected system files'),
+    ], legend='Hidden files') }}
+  {% endcall %}
+
+  <div class="border-t border-slate-800 pt-3">
+  {% call flag_group('taskbar', 'Start menu and taskbar') %}
+    {{ radios('gen.f.taskbarSearch', [
+        ('Box', 'Search box'),
+        ('Label', 'Search icon with a label'),
+        ('Icon', 'Search icon only'),
+        ('Hide', 'Hidden'),
+    ], legend='Search on the taskbar') }}
+  {% endcall %}
+  </div>
+
+  <div class="border-t border-slate-800 pt-3">{{ flag_group('system', 'System') }}</div>
+  <div class="border-t border-slate-800 pt-3">{{ flag_group('update', 'Windows Update') }}</div>
+
+  <div class="border-t border-slate-800 pt-3">
+  {% call flag_group('security', 'Security', caller_first=True) %}
+    {{ note('Each of these switches off a protection Windows normally has. Turn one on only if you know you need it.', tone='amber') }}
+  {% endcall %}
+  </div>
+
+  <div class="border-t border-slate-800 pt-3">{{ flag_group('edge', 'Microsoft Edge') }}</div>
+
+  <div class="border-t border-slate-800 pt-3">
+  {% call flag_group('vm', 'Virtual machine tools', caller_first=True) %}
+    {{ note('Each installs from the tools CD attached to the virtual machine, and does nothing when the CD is missing.') }}
+  {% endcall %}
+  </div>
+
+  {#- Switches a newer generator build has that this form has no label for yet. -#}
+  <div class="border-t border-slate-800 pt-3" x-show="genGroupFlags('other').length">
+    {{ flag_group('other', 'Other') }}
   </div>
 {% endcall %}
