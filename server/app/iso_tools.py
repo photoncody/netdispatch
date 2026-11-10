@@ -27,6 +27,7 @@ from .models import (
     ISO_UPLOADING,
     IsoImage,
 )
+from .pxe_engine import RAW_ISO_INITRD
 
 log = logging.getLogger("netdispatch.iso")
 
@@ -231,7 +232,40 @@ def detect_layout(root: Path) -> Detection:
             ),
         )
 
+    # --- Proxmox installers (VE, Backup Server, Mail Gateway) ----------------
+    kernel = has("boot/linux26")
+    if kernel and match(r"^\.[a-z0-9-]+-cd-id\.txt$"):
+        initrd = has("boot/initrd.img")
+        # The installer's init only looks for its ISO on local disks, or at
+        # /proxmox.iso inside the initramfs: iPXE puts the raw ISO there.
+        # rootfstype=ramfs: the default tmpfs root is capped at half of the
+        # RAM the kernel has set up that early, and unpacking the ISO into it
+        # failed with "write error" on a 6 GB client.
+        return Detection(
+            BOOT_LINUX,
+            _proxmox_name(root, has(".cd-info")),
+            kernel_path=kernel,
+            initrd_paths=([initrd] if initrd else []) + [f"{RAW_ISO_INITRD} /proxmox.iso"],
+            cmdline="ro ramdisk_size=16777216 rw quiet splash=silent rootfstype=ramfs",
+        )
+
     return Detection(BOOT_SANBOOT, "Unknown (raw ISO via sanboot)")
+
+
+def _proxmox_name(root: Path, cd_info: str | None) -> str:
+    """"Proxmox VE 9.2 installer", from the ISO's ``.cd-info`` when readable."""
+    info: dict[str, str] = {}
+    if cd_info:
+        try:
+            for line in (root / cd_info).read_text(errors="replace").splitlines()[:50]:
+                key, sep, value = line.partition("=")
+                if sep:
+                    info[key.strip()] = value.strip().strip("'\"")
+        except OSError:
+            pass
+    name = " ".join(v for v in (info.get("PRODUCTLONG"), info.get("RELEASE")) if v)
+    name = re.sub(r"[^A-Za-z0-9 ._-]", "", name)[:60].strip()
+    return f"{name or 'Proxmox'} installer"
 
 
 def apply_detection(iso: IsoImage, det: Detection) -> None:
@@ -257,6 +291,93 @@ def _usable_tree(root: Path) -> bool:
     return len(files) > 1
 
 
+_LINK_REFUSED = "Dangerous link path was ignored"
+
+
+def _only_refused_links(stderr: str) -> bool:
+    """True when 7-Zip's only errors are symbolic links it refused to create.
+
+    7-Zip refuses every link whose target has a ``.`` or ``..`` part, even
+    when it stays inside the image, and then exits with 2 (Proxmox installer
+    ISOs link ``dists/.../x.deb`` to ``../../../../proxmox/packages/x.deb``).
+    """
+    lines = [line for line in (stderr or "").splitlines() if line.strip()]
+    return bool(lines) and all(_LINK_REFUSED in line for line in lines)
+
+
+def _listed_links(tool: str, iso_path: Path, fmt: str | None) -> list[tuple[str, str]]:
+    """``(path, target)`` of every symbolic link in the image."""
+    cmd = [tool, "l", "-slt", "-ba"]
+    if fmt:
+        cmd.append(f"-t{fmt}")
+    cmd.append(str(iso_path))
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    links: list[tuple[str, str]] = []
+    path = None
+    for line in res.stdout.splitlines():
+        if line.startswith("Path = "):
+            path = line[len("Path = "):]
+        elif line.startswith("Symbolic Link = ") and path:
+            target = line[len("Symbolic Link = "):]
+            if target:
+                links.append((path, target))
+            path = None
+    return links
+
+
+def _restore_links(tool: str, iso_path: Path, fmt: str | None, root: Path) -> tuple[int, int]:
+    """Create the links 7-Zip refused, when they stay inside ``root``.
+
+    7-Zip leaves an empty file where each refused link belongs. That file is
+    replaced by the link if the target exists inside the image, and removed
+    otherwise. A directory link to one of its own parents (``debian -> .``)
+    is left out too: it holds nothing new and would stop relays caching the
+    image. Returns ``(restored, left out)``.
+    """
+    real_root = root.resolve()
+    pending: list[tuple[Path, str]] = []
+    for rel, target in _listed_links(tool, iso_path, fmt):
+        parts = PurePosixPath(rel).parts
+        if not parts or PurePosixPath(rel).is_absolute() or ".." in parts:
+            continue
+        link = root.joinpath(*parts)
+        try:
+            link.parent.resolve().relative_to(real_root)
+        except ValueError:
+            continue
+        if link.is_symlink():
+            continue  # 7-Zip made this one itself
+        if link.exists():
+            if not link.is_file() or link.stat().st_size:
+                continue  # real content, not a placeholder
+            link.unlink()
+        pending.append((link, target))
+
+    restored = 0
+    progress = True
+    while pending and progress:  # a link's target can be another link
+        progress = False
+        for item in list(pending):
+            link, target = item
+            if target.startswith("/") or not link.parent.is_dir():
+                continue
+            resolved = Path(os.path.realpath(link.parent / target))
+            if not resolved.exists():
+                continue
+            try:
+                resolved.relative_to(real_root)
+            except ValueError:
+                continue
+            parent = link.parent.resolve()
+            if resolved.is_dir() and (resolved == parent or resolved in parent.parents):
+                continue
+            os.symlink(target, link)
+            pending.remove(item)
+            restored += 1
+            progress = True
+    return restored, len(pending)
+
+
 def extract_iso(iso_path: Path, dest: Path) -> int:
     """Extract ``iso_path`` into ``dest`` (replacing it). Returns file count."""
     tool = seven_zip()
@@ -273,6 +394,11 @@ def extract_iso(iso_path: Path, dest: Path) -> int:
         cmd.append(str(iso_path))
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode in (0, 1) and _usable_tree(tmp):
+            break
+        if res.returncode == 2 and _only_refused_links(res.stderr) and _usable_tree(tmp):
+            # Every file was extracted; 7-Zip only refused symbolic links.
+            restored, dropped = _restore_links(tool, iso_path, fmt, tmp)
+            log.info("%s: restored %d symbolic links, left out %d", iso_path.name, restored, dropped)
             break
         errors.append(f"[{fmt or 'auto'}] exit {res.returncode}: {(res.stderr or res.stdout).strip()[-300:]}")
     else:
