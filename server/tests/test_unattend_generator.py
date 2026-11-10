@@ -210,6 +210,22 @@ def test_delete_generated_removes_settings(admin, app, unattendgen):
         assert db.get(UnattendGenerated, tpl["id"]) is None
 
 
+def test_unbounded_target_disk_sizes_are_kept(admin, unattendgen):
+    # null means no size limit. The form relies on getting it back as null, not as the default.
+    settings = copy.deepcopy(NEW_TEMPLATE_SETTINGS)
+    settings["setup"]["scripted"]["partitioning"]["targetDisk"] = {
+        "mode": "Auto", "index": None, "minSizeGiB": None, "maxSizeGiB": None, "requireNoPartitions": True,
+    }
+    r = admin.post("/api/unattend/generator", json={"name": "any-size", "settings": settings})
+    assert r.status_code == 201, r.text
+    detail = admin.get(f"/api/unattend/{r.json()['id']}").json()
+    assert detail["settings"] == settings
+    bounded = copy.deepcopy(NEW_TEMPLATE_SETTINGS)
+    bounded["setup"]["scripted"]["partitioning"]["targetDisk"] = {"mode": "Auto"}
+    preview = lambda s: admin.post("/api/unattend/generator/preview", json={"settings": s}).json()["rendered"]  # noqa: E731
+    assert preview(settings) != preview(bounded)  # the defaults (100 to 4000 GiB) do limit the size
+
+
 def test_generated_name_clash(admin, unattendgen):
     admin.post("/api/unattend", json={"name": "taken", "content": "<a/>"})
     r = admin.post("/api/unattend/generator", json={"name": "taken", "settings": NEW_TEMPLATE_SETTINGS})

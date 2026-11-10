@@ -139,8 +139,10 @@ function unattendGenerator() {
                 mode: disk.mode || 'Fixed',
                 index: disk.mode === 'Auto' ? 0 : (disk.index ?? 0),
                 autoIndex: disk.mode === 'Auto' ? (disk.index ?? '') : '',
-                minSizeGiB: disk.minSizeGiB ?? 100,
-                maxSizeGiB: disk.maxSizeGiB ?? 4000,
+                // An explicit null means "no limit" and must stay empty; only absent values
+                // get the defaults.
+                minSizeGiB: 'minSizeGiB' in disk ? (disk.minSizeGiB ?? '') : 100,
+                maxSizeGiB: 'maxSizeGiB' in disk ? (disk.maxSizeGiB ?? '') : 4000,
                 requireNoPartitions: disk.requireNoPartitions ?? true,
               },
             },
