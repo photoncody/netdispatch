@@ -204,6 +204,14 @@ function unattendGenerator() {
       // One on/off value per name the generator lists. With nothing stored, the form shows
       // what Windows does by itself.
       const checks = (names, stored, initial) => Object.fromEntries(names.map((n) => [n, stored ? !!stored(n) : initial(n)]));
+      // The generator matches catalog ids without regard to case. The form compares them
+      // exactly, so stored ids take the spelling the schema lists.
+      const canon = (items, id) => (items.find((i) => i.id.toLowerCase() === String(id).toLowerCase()) || { id }).id;
+      const icons = m.desktopIcons && Object.fromEntries(Object.entries(m.desktopIcons).map(([id, v]) => [canon(sch.desktopIcons, id), v]));
+      const folders = m.startFolders && m.startFolders.map((id) => canon(sch.startFolders, id));
+      // Custom without flags means no option is on. Every box is ticked only when the
+      // stored mode is another one, as the starting point for switching to Custom.
+      const stickyFlags = sticky.mode === 'Custom' ? (sticky.flags || []) : null;
       const arch = m.processorArchitectures || ['Amd64'];
       const locales = (lang.locales && lang.locales.length ? lang.locales : [{ locale: 'en-US', keyboard: '00000409' }]);
       const flags = {};
@@ -295,11 +303,11 @@ function unattendGenerator() {
         },
         processAudit: m.processAudit || 'Disabled',
         appLocker: { on: m.appLockerPolicy != null, xml: str(m.appLockerPolicy) },
-        components: (m.components || []).map((c) => ({ component: c.component, pass: c.pass, xml: str(c.xml), _k: key() })),
+        components: (m.components || []).map((c) => ({ component: canon(sch.components, c.component), pass: c.pass, xml: str(c.xml), _k: key() })),
         lockKeys: { on: !!m.lockKeys, capsLock: lockKey(lk.capsLock), numLock: lockKey(lk.numLock), scrollLock: lockKey(lk.scrollLock) },
         stickyKeys: {
           mode: sticky.mode || 'Default',
-          flags: checks(sch.stickyKeys, sticky.flags && ((n) => sticky.flags.includes(n)), () => true),
+          flags: checks(sch.stickyKeys, stickyFlags && ((n) => stickyFlags.includes(n)), () => true),
         },
         wallpaper: { mode: wall.mode || 'Default', color: wall.color || '#000000', script: str(wall.script) },
         lockScreen: { on: m.lockScreenScript != null, script: str(m.lockScreenScript) },
@@ -323,11 +331,11 @@ function unattendGenerator() {
         },
         desktopIcons: {
           on: !!m.desktopIcons,
-          items: checks(sch.desktopIcons.map((i) => i.id), m.desktopIcons && ((n) => m.desktopIcons[n] ?? n === 'RecycleBin'), (n) => n === 'RecycleBin'),
+          items: checks(sch.desktopIcons.map((i) => i.id), icons && ((n) => icons[n] ?? n === 'RecycleBin'), (n) => n === 'RecycleBin'),
         },
         startFolders: {
           on: m.startFolders != null,
-          items: checks(sch.startFolders.map((i) => i.id), m.startFolders && ((n) => m.startFolders.includes(n)), () => false),
+          items: checks(sch.startFolders.map((i) => i.id), folders && ((n) => folders.includes(n)), () => false),
         },
         expressSettings: m.expressSettings || 'DisableAll',
         hiddenFiles: m.hiddenFiles || 'Default',
@@ -335,7 +343,7 @@ function unattendGenerator() {
         keepSensitiveFiles: !!m.keepSensitiveFiles,
         bypassNetworkCheck: !!m.bypassNetworkCheck,
         flags,
-        bloatware: [...(m.bloatware || [])],
+        bloatware: (m.bloatware || []).map((id) => canon(sch.bloatware, id)),
         scripts: {
           items: (scripts.items || []).map((x) => ({ phase: x.phase, type: x.type, content: str(x.content), _k: key() })),
           restartExplorer: !!scripts.restartExplorer,
