@@ -66,6 +66,54 @@ public sealed record HostConfig
     public IReadOnlyList<string> Bloatware { get; init; } = [];
 
     public ScriptOptions Scripts { get; init; } = new();
+
+    /// <summary>Record process creation in the Security event log.</summary>
+    public ProcessAuditMode ProcessAudit { get; init; } = ProcessAuditMode.Disabled;
+
+    /// <summary>An AppLocker policy as XML, applied in the specialize pass. Null means none.</summary>
+    public string? AppLockerPolicy { get; init; }
+
+    /// <summary>Extra answer-file components, each with the XML to put inside it.</summary>
+    public IReadOnlyList<CustomComponent> Components { get; init; } = [];
+
+    /// <summary>Initial state and behaviour of Caps Lock, Num Lock and Scroll Lock. Null leaves them alone.</summary>
+    public LockKeyOptions? LockKeys { get; init; }
+
+    public StickyKeyOptions StickyKeys { get; init; } = new();
+
+    public WallpaperOptions Wallpaper { get; init; } = new();
+
+    /// <summary>
+    /// A PowerShell script that returns the lock screen image as bytes. It runs in the
+    /// specialize pass. Null keeps Windows' own lock screen.
+    /// </summary>
+    public string? LockScreenScript { get; init; }
+
+    /// <summary>Light or dark theme and the accent colour. Null keeps Windows' own.</summary>
+    public ColorOptions? Colors { get; init; }
+
+    /// <summary>Pinned apps in the Windows 11 Start menu; Content is JSON.</summary>
+    public LayoutOptions StartPins { get; init; } = new();
+
+    /// <summary>Tiles in the Windows 10 Start menu; Content is a LayoutModificationTemplate XML.</summary>
+    public LayoutOptions StartTiles { get; init; } = new();
+
+    /// <summary>Pinned taskbar icons; Content is a LayoutModificationTemplate XML.</summary>
+    public LayoutOptions TaskbarIcons { get; init; } = new();
+
+    public VisualEffectOptions VisualEffects { get; init; } = new();
+
+    /// <summary>
+    /// Desktop icons by upstream ID: true shows the icon, false hides it, and an icon that is
+    /// not listed is left alone. Null changes nothing.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? DesktopIcons { get; init; }
+
+    /// <summary>
+    /// Upstream IDs of the folders shown next to the Start menu's power button (Windows 11).
+    /// Null keeps Windows' own; an empty list shows none.
+    /// </summary>
+    public IReadOnlyList<string>? StartFolders { get; init; }
 }
 
 public enum ProcessorArchitecture { X86, Amd64, Arm64 }
@@ -379,11 +427,47 @@ public enum WifiMode
     Interactive,
     /// <summary>Setup skips the Wi-Fi page.</summary>
     Skip,
+    /// <summary>Add a profile for the network described by Profile.</summary>
+    Profile,
+    /// <summary>Add the WLAN profile given as XML (as exported by "netsh wlan export profile").</summary>
+    ProfileXml,
 }
 
 public sealed record WifiOptions
 {
     public WifiMode Mode { get; init; } = WifiMode.Interactive;
+
+    /// <summary>Only with WifiMode.Profile.</summary>
+    public WifiProfile? Profile { get; init; }
+
+    /// <summary>Only with WifiMode.ProfileXml.</summary>
+    public string? ProfileXml { get; init; }
+}
+
+public enum WifiAuthentication
+{
+    /// <summary>No password.</summary>
+    Open,
+    /// <summary>WPA2-Personal.</summary>
+    Wpa2,
+    /// <summary>WPA3-Personal, with transition mode so WPA2 access points still work.</summary>
+    Wpa3,
+}
+
+public sealed record WifiProfile
+{
+    /// <summary>Network name, at most 32 bytes in UTF-8.</summary>
+    public required string Ssid { get; init; }
+
+    public WifiAuthentication Authentication { get; init; } = WifiAuthentication.Wpa2;
+
+    /// <summary>8 to 63 characters, or 64 hex digits. Empty for an open network.</summary>
+    public string Password { get; init; } = "";
+
+    public bool ConnectAutomatically { get; init; } = true;
+
+    /// <summary>The network does not broadcast its name.</summary>
+    public bool Hidden { get; init; }
 }
 
 // ---- User accounts ----
@@ -459,4 +543,140 @@ public sealed record CustomScript
     public required ScriptType Type { get; init; }
 
     public required string Content { get; init; }
+}
+
+// ---- Process auditing, components ----
+
+public enum ProcessAuditMode
+{
+    Disabled,
+    Enabled,
+    /// <summary>Also record each process's command line.</summary>
+    EnabledWithCommandLine,
+}
+
+public sealed record CustomComponent
+{
+    /// <summary>Upstream component ID, e.g. "Microsoft-Windows-TerminalServices-LocalSessionManager".</summary>
+    public required string Component { get; init; }
+
+    /// <summary>Configuration pass, spelled as in the answer file, e.g. "specialize".</summary>
+    public required string Pass { get; init; }
+
+    /// <summary>The XML to put inside the component element.</summary>
+    public required string Xml { get; init; }
+}
+
+// ---- Keyboard ----
+
+public sealed record LockKeyOptions
+{
+    public LockKey CapsLock { get; init; } = new();
+
+    public LockKey NumLock { get; init; } = new();
+
+    public LockKey ScrollLock { get; init; } = new();
+}
+
+public sealed record LockKey
+{
+    /// <summary>The key is on when Windows starts.</summary>
+    public bool On { get; init; }
+
+    /// <summary>Pressing the key does nothing.</summary>
+    public bool Ignore { get; init; }
+}
+
+public enum StickyKeyMode
+{
+    /// <summary>Windows' own behaviour: pressing Shift five times offers Sticky Keys.</summary>
+    Default,
+    /// <summary>Sticky Keys and its shortcut are off.</summary>
+    Disabled,
+    Custom,
+}
+
+public sealed record StickyKeyOptions
+{
+    public StickyKeyMode Mode { get; init; } = StickyKeyMode.Default;
+
+    /// <summary>
+    /// Upstream names of the Sticky Keys options to turn on, e.g. "HotKeyActive". The names a
+    /// build accepts are listed by the CLI's "schema" command. Only with StickyKeyMode.Custom.
+    /// </summary>
+    public IReadOnlyList<string>? Flags { get; init; }
+}
+
+// ---- Appearance ----
+
+public enum WallpaperMode
+{
+    Default,
+    /// <summary>A plain colour.</summary>
+    SolidColor,
+    /// <summary>A PowerShell script returns the image as bytes. It runs in the specialize pass.</summary>
+    Script,
+}
+
+public sealed record WallpaperOptions
+{
+    public WallpaperMode Mode { get; init; } = WallpaperMode.Default;
+
+    /// <summary>"#rrggbb". Only with WallpaperMode.SolidColor.</summary>
+    public string? Color { get; init; }
+
+    /// <summary>Only with WallpaperMode.Script.</summary>
+    public string? Script { get; init; }
+}
+
+public enum ThemeMode { Dark, Light }
+
+public sealed record ColorOptions
+{
+    /// <summary>Taskbar, Start menu and other Windows surfaces.</summary>
+    public ThemeMode SystemTheme { get; init; } = ThemeMode.Light;
+
+    public ThemeMode AppsTheme { get; init; } = ThemeMode.Light;
+
+    public bool Transparency { get; init; } = true;
+
+    public bool AccentOnStart { get; init; }
+
+    public bool AccentOnBorders { get; init; }
+
+    /// <summary>"#rrggbb". The default is Windows' own blue.</summary>
+    public string AccentColor { get; init; } = "#0078D4";
+}
+
+public enum VisualEffectMode { Default, BestAppearance, BestPerformance, Custom }
+
+public sealed record VisualEffectOptions
+{
+    public VisualEffectMode Mode { get; init; } = VisualEffectMode.Default;
+
+    /// <summary>
+    /// Upstream effect names (e.g. "DragFullWindows") and whether each is on. The names a build
+    /// accepts are listed by the CLI's "schema" command. Only with VisualEffectMode.Custom.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? Effects { get; init; }
+}
+
+// ---- Start menu and taskbar layout ----
+
+public enum LayoutMode
+{
+    /// <summary>Windows' own layout.</summary>
+    Default,
+    /// <summary>Nothing pinned.</summary>
+    Empty,
+    /// <summary>The layout given in Content.</summary>
+    Custom,
+}
+
+public sealed record LayoutOptions
+{
+    public LayoutMode Mode { get; init; } = LayoutMode.Default;
+
+    /// <summary>Only with LayoutMode.Custom.</summary>
+    public string? Content { get; init; }
 }

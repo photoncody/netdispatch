@@ -1,0 +1,64 @@
+{% from "unattend/_macros.html" import checkbox, color, id_checks, named_checks, note, radios, section, textarea %}
+{% call section('look', 'Appearance') %}
+  {{ note('Everything here is optional and applies to every user who signs in.') }}
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="space-y-2">
+      {{ radios('gen.f.wallpaper.mode', [
+          ('Default', 'Windows\' own wallpaper'),
+          ('SolidColor', 'A plain colour'),
+          ('Script', 'An image from a script'),
+      ], legend='Desktop wallpaper') }}
+      <div x-show="gen.f.wallpaper.mode === 'SolidColor'">{{ color('gen.f.wallpaper.color', 'Colour') }}</div>
+    </div>
+    <div class="space-y-2">
+      <h4 class="text-xs uppercase tracking-wider text-slate-400">Lock screen</h4>
+      {{ checkbox('gen.f.lockScreen.on', 'Set the lock screen image from a script') }}
+    </div>
+  </div>
+  <div x-show="gen.f.wallpaper.mode === 'Script'">
+    {{ textarea('gen.f.wallpaper.script', 'Wallpaper script (PowerShell)', rows=4,
+                help='Runs during installation as SYSTEM and must return the image file as bytes.',
+                placeholder="(Invoke-WebRequest -Uri 'https://example.com/wallpaper.jpg' -UseBasicParsing).Content;") }}
+  </div>
+  <div x-show="gen.f.lockScreen.on">
+    {{ textarea('gen.f.lockScreen.script', 'Lock screen script (PowerShell)', rows=4,
+                help='Runs during installation as SYSTEM and must return the image file as bytes.',
+                placeholder="(Invoke-WebRequest -Uri 'https://example.com/lock.jpg' -UseBasicParsing).Content;") }}
+  </div>
+
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Colours</h4>
+    {{ checkbox('gen.f.colors.on', 'Set the theme and accent colour') }}
+    <div x-show="gen.f.colors.on" class="space-y-3">
+      <div class="grid gap-4 sm:grid-cols-3">
+        {{ radios('gen.f.colors.systemTheme', [('Light', 'Light'), ('Dark', 'Dark')], legend='Windows (taskbar, Start)') }}
+        {{ radios('gen.f.colors.appsTheme', [('Light', 'Light'), ('Dark', 'Dark')], legend='Apps') }}
+        {{ color('gen.f.colors.accentColor', 'Accent colour') }}
+      </div>
+      <div class="grid gap-2 sm:grid-cols-3">
+        {{ checkbox('gen.f.colors.transparency', 'Transparency effects') }}
+        {{ checkbox('gen.f.colors.accentOnStart', 'Accent colour on Start and taskbar', help='Needs the dark Windows theme.') }}
+        {{ checkbox('gen.f.colors.accentOnBorders', 'Accent colour on title bars and borders') }}
+      </div>
+    </div>
+  </div>
+
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    {{ radios('gen.f.effects.mode', [
+        ('Default', 'Let Windows choose'),
+        ('BestAppearance', 'Best appearance (all on)'),
+        ('BestPerformance', 'Best performance (all off)'),
+        ('Custom', 'Choose'),
+    ], legend='Visual effects') }}
+    <div x-show="gen.f.effects.mode === 'Custom'">
+      {{ named_checks('genNamed(gen.schema.visualEffects, genEffectLabels)', 'gen.f.effects.items') }}
+    </div>
+  </div>
+
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Desktop icons</h4>
+    {{ checkbox('gen.f.desktopIcons.on', 'Choose which icons the desktop shows') }}
+    <div x-show="gen.f.desktopIcons.on">{{ id_checks('gen.schema.desktopIcons', 'gen.f.desktopIcons.items') }}</div>
+  </div>
+{% endcall %}

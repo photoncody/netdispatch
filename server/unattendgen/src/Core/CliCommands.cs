@@ -117,6 +117,11 @@ public static class CliCommands
             timeZones = catalog.TimeZones,
             windowsEditions = catalog.WindowsEditions,
             bloatware = catalog.Bloatwares,
+            desktopIcons = catalog.DesktopIcons,
+            startFolders = catalog.StartFolders,
+            components = catalog.Components,
+            visualEffects = UpstreamNames.Of<Effect>(),
+            stickyKeys = UpstreamNames.Of<StickyKeys>(),
         });
         return ExitOk;
     }

@@ -1,0 +1,80 @@
+{% from "unattend/_macros.html" import checkbox, named_checks, note, radios, section, textarea %}
+
+{% macro lock_key(model, label) -%}
+<div class="space-y-1.5">
+  <h5 class="text-sm text-slate-200">{{ label }}</h5>
+  {{ checkbox(model ~ '.on', 'On when Windows starts') }}
+  {{ checkbox(model ~ '.ignore', 'Pressing the key does nothing') }}
+</div>
+{%- endmacro %}
+
+{% call section('advanced', 'Advanced', "gen.f.components.length ? gen.f.components.length + ' component(s)' : ''") %}
+  <div class="space-y-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Keyboard</h4>
+    {{ checkbox('gen.f.lockKeys.on', 'Set Caps Lock, Num Lock and Scroll Lock') }}
+    <div x-show="gen.f.lockKeys.on" class="grid gap-4 sm:grid-cols-3">
+      {{ lock_key('gen.f.lockKeys.capsLock', 'Caps Lock') }}
+      {{ lock_key('gen.f.lockKeys.numLock', 'Num Lock') }}
+      {{ lock_key('gen.f.lockKeys.scrollLock', 'Scroll Lock') }}
+    </div>
+    {{ radios('gen.f.stickyKeys.mode', [
+        ('Default', 'Windows default'),
+        ('Disabled', 'Off, including the Shift shortcut'),
+        ('Custom', 'Choose'),
+    ], legend='Sticky Keys') }}
+    <div x-show="gen.f.stickyKeys.mode === 'Custom'">
+      {{ named_checks('genNamed(gen.schema.stickyKeys, genStickyLabels)', 'gen.f.stickyKeys.flags') }}
+    </div>
+  </div>
+
+  <div class="border-t border-slate-800 pt-3">
+    {{ radios('gen.f.processAudit', [
+        ('Disabled', 'Off'),
+        ('Enabled', 'Record every process that starts'),
+        ('EnabledWithCommandLine', 'Record every process with its command line'),
+    ], legend='Process auditing (Security event log)') }}
+  </div>
+
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">AppLocker</h4>
+    {{ checkbox('gen.f.appLocker.on', 'Apply an AppLocker policy', help='Windows starts the Application Identity service and enforces the policy from the first start.') }}
+    <div x-show="gen.f.appLocker.on">
+      {{ textarea('gen.f.appLocker.xml', 'Policy (XML)', rows=8, help='As written by: Get-AppLockerPolicy -Effective -Xml') }}
+    </div>
+  </div>
+
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Answer-file components</h4>
+    {{ note('Settings this form has no control for. Type the XML that goes inside the component element; it replaces whatever the generator would write for that component and pass. The windowsPE pass is only available when Windows Setup runs the PE stage.') }}
+    <div class="space-y-2">
+      <template x-for="(c, i) in gen.f.components" :key="c._k">
+        <div class="space-y-2 rounded-md border border-slate-800 bg-slate-950/50 p-2">
+          <div class="flex flex-wrap items-end gap-2">
+            <label class="min-w-0 flex-1 basis-64 text-xs uppercase tracking-wider text-slate-400">Component
+              <select x-model="c.component" @change="genComponentChanged(c)"
+                      class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+                <template x-for="o in gen.schema.components" :key="o.id">
+                  <option :value="o.id" x-text="o.id" :selected="o.id === c.component"></option>
+                </template>
+              </select>
+            </label>
+            <label class="w-40 text-xs uppercase tracking-wider text-slate-400">Pass
+              <select x-model="c.pass"
+                      class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+                <template x-for="p in genComponentPasses(c.component)" :key="p">
+                  <option :value="p" x-text="p" :selected="p === c.pass"></option>
+                </template>
+              </select>
+            </label>
+            <button type="button" @click="genRemove(gen.f.components, i)"
+                    class="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-400 hover:border-rose-400 hover:text-rose-300" title="Remove">✕</button>
+          </div>
+          <textarea x-model="c.xml" rows="4" spellcheck="false" placeholder="<fDenyTSConnections>false</fDenyTSConnections>"
+                    class="block w-full rounded-md border border-slate-700 bg-slate-950 p-2 font-mono text-xs leading-relaxed text-slate-200 focus:border-emerald-500 focus:outline-none"></textarea>
+        </div>
+      </template>
+      <button type="button" @click="genAddComponent()"
+              class="rounded-md border border-dashed border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 hover:text-slate-200">+ Add a component</button>
+    </div>
+  </div>
+{% endcall %}

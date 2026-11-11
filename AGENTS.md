@@ -275,6 +275,12 @@ Verified with this harness:
 - **The settings format is ours (`HostConfig`), not upstream's `Configuration`.** It is mapped by hand in `ConfigurationMapper`, so an upstream rename is a compile error at the pin bump rather than a silent change to stored settings. The roughly 40 plain on/off settings are the exception: they go by upstream's own names through `HostConfig.Flags` (`UpstreamFlags`, by reflection over the constructor), so new upstream switches work, and show in the form under "More Windows settings", without code changes.
 - **Form labels for the on/off settings** are the `genFlagGroups` table in `static/unattend-generator.js`; the group titles are in `templates/unattend/_sec_switches.html`. A flag the program lists that has no label shows under "Other" by its upstream name, so a pin bump can't hide a new one. `test_form_labels_name_real_flags` fails when a label names a flag upstream removed.
 - **Upstream settings that aren't on/off get their own `HostConfig` property** with our own value names, mapped in `ConfigurationMapper`: `hiddenFiles` (upstream `HideFiles`) and `taskbarSearch`. A new optional property with a default needs no `schemaVersion` bump: stored settings without it stay valid.
+- **Settings that take upstream's own names** (`visualEffects.effects`, `stickyKeys.flags`, a component's `pass`) go through `UpstreamNames`, which matches upstream's enum names exactly and refuses numbers. The schema lists them (`visualEffects`, `stickyKeys`, `components[].passes`), so a name upstream adds works without a change. Their form labels are `genEffectLabels` and `genStickyLabels`; a name without a label shows by its own name.
+- **"Leave alone" is null or absent, not a mode,** for the settings that are one optional value: `lockKeys`, `colors`, `desktopIcons`, `startFolders`, `appLockerPolicy`, `lockScreenScript`. The form keeps an on/off box for each (`gen.f.<name>.on`) and `genSettings()` leaves the key out when it is off. `startFolders: []` is not the same as absent: it shows no folders.
+- **The form can't show a third state.** The generator leaves alone a visual effect or desktop icon that custom settings don't list, but the form sends every one. Settings made through the API with a partial list reopen with the missing effects ticked and the missing icons as Windows has them (only the Recycle Bin shown).
+- **Upstream's own checks are not always enough.** It reads the Start pins JSON token by token, so `{` alone passed. `ValidateStartPinsJson` parses it properly and wants an object. Check what upstream really rejects before relying on it for a new free-text setting.
+- **Custom components replace upstream's.** A component in `components` empties whatever the library wrote for the same component and pass (for example the computer name in `Microsoft-Windows-Shell-Setup`/`specialize`). The library refuses `windowsPE` components unless Windows Setup runs the PE stage (`setup.mode: Standard`).
+- **Duplicate (`POST /api/unattend/{id}/duplicate`) copies the file and the settings row as they are.** It does not run the generator, so it works without the program, and a copy of a template from an older generator is flagged `stale` like its source.
 - **Inactive modes are rejected.** The validator rejects any field of a mode that isn't selected, for example `timeZone.id` with `mode: Implicit`. `genSettings()` in the JS sends only the selected modes' fields, while the form keeps the rest.
 - **Two upstream build details matter.**
   - The assembly name must stay `UnattendGenerator`: `Bloatware.json` names types by assembly, and resources are embedded.
@@ -290,7 +296,7 @@ Verified with this harness:
   4. If `modifier/Disk.cs` changed, run the QEMU `win new` test with a generated template.
 
   Templates saved with an older commit keep their file and are flagged `stale` until saved again.
-- **Stored settings.** They hold account passwords in plain text, the same exposure as the XML in `data/configs`. Rows are deleted explicitly with their template.
+- **Stored settings.** They hold account passwords and a Wi-Fi password in plain text, the same exposure as the XML in `data/configs`. Rows are deleted explicitly with their template.
 
 **Ops / tooling**
 - **Shell scripts must be LF** (`.gitattributes`). A CRLF entrypoint fails with a confusing `not found` error.

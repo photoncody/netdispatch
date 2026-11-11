@@ -63,6 +63,41 @@
 </label>
 {%- endmacro %}
 
+{#- A colour as #rrggbb: a picker and the text beside it. -#}
+{% macro color(model, label) -%}
+<label class="block text-xs uppercase tracking-wider text-slate-400">{{ label }}
+  <span class="mt-1 flex items-center gap-2">
+    <input type="color" x-model="{{ model }}" class="h-8 w-10 shrink-0 cursor-pointer rounded border border-slate-700 bg-slate-950">
+    <input type="text" x-model="{{ model }}" maxlength="7" placeholder="#rrggbb" autocomplete="off" spellcheck="false"
+           class="block w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 font-mono text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+  </span>
+</label>
+{%- endmacro %}
+
+{#- Checkboxes for a list of { name, label } (see genNamed); values is the object they set. -#}
+{% macro named_checks(items, values) -%}
+<div class="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+  <template x-for="o in {{ items }}" :key="o.name">
+    <label class="flex items-start gap-2 text-sm text-slate-200" :title="o.name">
+      <input type="checkbox" x-model="{{ values }}[o.name]" class="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500">
+      <span x-text="o.label"></span>
+    </label>
+  </template>
+</div>
+{%- endmacro %}
+
+{#- Checkboxes for a schema list of { id, displayName }. -#}
+{% macro id_checks(items, values) -%}
+<div class="grid gap-x-4 gap-y-2 sm:grid-cols-3">
+  <template x-for="o in {{ items }}" :key="o.id">
+    <label class="flex items-start gap-2 text-sm text-slate-200">
+      <input type="checkbox" x-model="{{ values }}[o.id]" class="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500">
+      <span x-text="o.displayName"></span>
+    </label>
+  </template>
+</div>
+{%- endmacro %}
+
 {#- A collapsible form section. Use with call: the caller block is the body. -#}
 {% macro section(id, title, summary_expr='') -%}
 <details id="gen-{{ id }}" open class="group rounded-lg border border-slate-800 bg-slate-900/60">

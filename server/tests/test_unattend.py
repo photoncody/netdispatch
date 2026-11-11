@@ -82,3 +82,39 @@ def test_template_files_dropped_in_are_indexed(admin, settings):
     (settings.configs_dir / "dropped.xml").write_text(TPL)
     names = [t["name"] for t in admin.get("/api/unattend").json()]
     assert "dropped" in names
+
+
+def test_duplicate_raw_template(admin, settings):
+    src = admin.post("/api/unattend", json={"name": "Basic", "description": "d", "content": TPL}).json()
+    r = admin.post(f"/api/unattend/{src['id']}/duplicate")
+    assert r.status_code == 201, r.text
+    dup = r.json()
+    assert dup["name"] == "Basic (copy)" and dup["description"] == "d"
+    assert dup["generated"] is False and "settings" not in dup
+    assert dup["content"] == TPL and dup["filename"] != src["filename"]
+    assert (settings.configs_dir / dup["filename"]).read_text() == TPL
+    assert admin.post(f"/api/unattend/{src['id']}/duplicate").json()["name"] == "Basic (copy 2)"
+    assert admin.post(f"/api/unattend/{dup['id']}/duplicate").json()["name"] == "Basic (copy) (copy)"
+    assert len(admin.get("/api/unattend").json()) == 4
+
+    # Editing the copy leaves the original alone.
+    admin.put(f"/api/unattend/{dup['id']}", json={"name": "Other", "content": "<a/>"})
+    assert admin.get(f"/api/unattend/{src['id']}").json()["content"] == TPL
+
+    assert admin.post("/api/unattend/99999/duplicate").status_code == 404
+    (settings.configs_dir / src["filename"]).unlink()
+    assert admin.post(f"/api/unattend/{src['id']}/duplicate").status_code == 404
+
+
+def test_duplicate_keeps_the_name_within_its_limit(admin):
+    long = "n" * 200
+    src = admin.post("/api/unattend", json={"name": long, "content": TPL}).json()
+    names = [admin.post(f"/api/unattend/{src['id']}/duplicate").json()["name"] for _ in range(2)]
+    assert names == ["n" * 193 + " (copy)", "n" * 191 + " (copy 2)"]
+
+
+def test_duplicate_needs_the_csrf_header(admin):
+    src = admin.post("/api/unattend", json={"name": "Basic", "content": TPL}).json()
+    del admin.headers["X-Requested-With"]
+    assert admin.post(f"/api/unattend/{src['id']}/duplicate").status_code == 403
+    assert len(admin.get("/api/unattend").json()) == 1

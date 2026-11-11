@@ -47,6 +47,9 @@ public static class HostConfigJson
         Check(config.Language.Locales, "language.locales");
         Check(config.Accounts.Users, "accounts.users");
         Check(config.Scripts.Items, "scripts.items");
+        Check(config.Components, "components");
+        Check(config.StickyKeys.Flags ?? [], "stickyKeys.flags");
+        Check(config.StartFolders ?? [], "startFolders");
 
         static void Check<T>(IReadOnlyList<T> items, string path)
         {

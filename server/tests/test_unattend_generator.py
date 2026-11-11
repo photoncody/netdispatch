@@ -93,8 +93,13 @@ def test_schema(gen):
     assert schema["hostnameToken"] == "__ND_HOSTNAME__"
     assert schema["defaults"]["computerName"]["mode"] == "Random"
     assert any(f["name"] == "DisableUac" for f in schema["flags"])
-    for key in ("imageLanguages", "userLocales", "keyboards", "geoLocations", "timeZones", "windowsEditions", "bloatware"):
+    for key in (
+        "imageLanguages", "userLocales", "keyboards", "geoLocations", "timeZones", "windowsEditions", "bloatware",
+        "desktopIcons", "startFolders", "components", "visualEffects", "stickyKeys",
+    ):  # fmt: skip
         assert schema[key], key
+    shell = next(c for c in schema["components"] if c["id"] == "Microsoft-Windows-Shell-Setup")
+    assert "specialize" in shell["passes"] and "oobeSystem" in shell["passes"]
     assert gen.schema() is schema  # cached
 
 
@@ -298,3 +303,168 @@ def test_older_engine_is_flagged(admin, app, unattendgen):
         db.get(UnattendGenerated, tpl["id"]).upstream_commit = "0" * 40
         db.commit()
     assert admin.get(f"/api/unattend/{tpl['id']}").json()["stale"] is True
+
+
+# ----------------------------------------------------------- Wi-Fi, appearance, layout, advanced
+APPLOCKER = (
+    '<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="AuditOnly">'
+    '<FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="All files" Description="" '
+    'UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions>'
+    "</FilePathRule></RuleCollection></AppLockerPolicy>"
+)
+
+LONG_TAIL = {
+    "wifi": {
+        "mode": "Profile",
+        "profile": {"ssid": "Lab Net", "authentication": "Wpa3", "password": "change-me-wifi", "hidden": True},
+    },
+    "processAudit": "EnabledWithCommandLine",
+    "appLockerPolicy": APPLOCKER,
+    "components": [
+        {
+            "component": "Microsoft-Windows-TerminalServices-LocalSessionManager",
+            "pass": "specialize",
+            "xml": "<fDenyTSConnections>false</fDenyTSConnections>",
+        }
+    ],
+    "lockKeys": {"capsLock": {"ignore": True}, "numLock": {"on": True}, "scrollLock": {}},
+    "stickyKeys": {"mode": "Custom", "flags": ["Indicator"]},
+    "wallpaper": {"mode": "Script", "script": "'wall {{ x }} __ND_HOSTNAME__' | Out-Null; if ($a) {% b %}"},
+    "lockScreenScript": "'lock {# c #} __ND_MAC_PLAIN__' | Out-Null",
+    "colors": {"systemTheme": "Dark", "appsTheme": "Light", "accentColor": "#ff8800", "accentOnStart": True},
+    "startPins": {"mode": "Custom", "content": '{"pinnedList":[{"desktopAppLink":"%APPDATA%\\\\x {{ y }}.lnk"}]}'},
+    "startTiles": {"mode": "Empty"},
+    "taskbarIcons": {"mode": "Empty"},
+    "visualEffects": {"mode": "Custom", "effects": {"FontSmoothing": True, "MenuAnimation": False}},
+    "desktopIcons": {"ThisPC": True, "RecycleBin": False},
+    "startFolders": ["Settings", "Downloads"],
+}
+
+
+def test_long_tail_settings_generate_and_render(gen):
+    tpl, warnings = gen.build_template(new_settings(**LONG_TAIL))
+    rendered = render(tpl, sample_context())
+    ET.fromstring(rendered.encode())
+    assert "\n" not in rendered.replace("\r\n", "")
+    # Embedded files are text inside the answer file, so read them unescaped as well.
+    text = rendered + "".join(ET.fromstring(rendered.encode()).itertext())
+    for marker in (
+        'netsh.exe wlan connect name="Lab Net"',
+        "<keyMaterial>change-me-wifi</keyMaterial>",
+        "ProcessCreationIncludeCmdLine_Enabled",
+        "Set-AppLockerPolicy -XmlPolicy",
+        "<fDenyTSConnections>false</fDenyTSConnections>",
+        "'InitialKeyboardIndicators' -Type 'String' -Value 2",
+        "'Scancode Map'",
+        "/v Flags /t REG_SZ /d 42 /f",
+        # Jinja-like text and the placeholders inside scripts and the pinned list.
+        "'wall {{ x }} ND-123456' | Out-Null; if ($a) {% b %}",
+        "'lock {# c #} 525400123456' | Out-Null",
+        "x {{ y }}.lnk",
+        "$htmlAccentColor = '#FF8800';",
+        "#leaveempty",
+        "-Name 'VisualFXSetting' -Type 'DWord' -Value 3",
+        "-Name '{20d04fe0-3aea-1069-a2d8-08002b30309d}' -Value 0",
+        "-Name 'VisiblePlaces'",
+    ):
+        assert marker in text, marker
+    assert any("Wi-Fi password" in w for w in warnings)
+
+
+def test_settings_from_before_the_long_tail_are_unchanged(gen):
+    # Stored settings never have the new keys; they must keep producing the same file.
+    spelled_out = new_settings(
+        processAudit="Disabled",
+        components=[],
+        stickyKeys={"mode": "Default"},
+        wallpaper={"mode": "Default"},
+        startPins={"mode": "Default"},
+        startTiles={"mode": "Default"},
+        taskbarIcons={"mode": "Default"},
+        visualEffects={"mode": "Default"},
+    )
+    assert gen.generate(spelled_out)[0] == gen.generate(NEW_TEMPLATE_SETTINGS)[0]
+
+
+def test_windows_pe_components_need_windows_setup(gen):
+    pe = [{"component": "Microsoft-Windows-Setup", "pass": "windowsPE", "xml": "<Diagnostics><OptIn>false</OptIn></Diagnostics>"}]
+    # The new-template settings let a generated script run the PE stage.
+    with pytest.raises(GeneratorError, match="windowsPE"):
+        gen.generate(new_settings(components=pe))
+    xml, _ = gen.generate(new_settings(components=pe, setup={"mode": "Standard"}))
+    assert "<OptIn>false</OptIn>" in xml
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"wifi": {"mode": "Profile"}}, "wifi.profile is required"),
+        ({"wifi": {"mode": "Profile", "profile": {"ssid": "Lab", "password": "short"}}}, "8 to 63"),
+        ({"wifi": {"mode": "ProfileXml", "profileXml": "<WLANProfile/>"}}, "WLAN profile XML is invalid"),
+        ({"appLockerPolicy": "<x/>"}, "AppLocker policy XML is invalid"),
+        ({"components": [{"component": "Nope", "pass": "specialize", "xml": "<a/>"}]}, "not a known upstream value"),
+        ({"components": [{"component": "Microsoft-Windows-TerminalServices-LocalSessionManager", "pass": "windowsPE", "xml": "<a/>"}]}, "cannot be used"),
+        ({"components": [{"component": "Microsoft-Windows-Shell-Setup", "pass": "specialize", "xml": "<a>"}]}, "not well-formed"),
+        ({"wallpaper": {"mode": "SolidColor", "color": "blue"}}, "#rrggbb"),
+        ({"wallpaper": {"mode": "Default", "script": "x"}}, "only used"),
+        ({"colors": {"accentColor": "#12"}}, "#rrggbb"),
+        ({"startPins": {"mode": "Custom", "content": "{"}}, "not valid JSON"),
+        ({"taskbarIcons": {"mode": "Custom", "content": "<a>"}}, "not well-formed"),
+        ({"startTiles": {"mode": "Empty", "content": "<a/>"}}, "only used"),
+        ({"visualEffects": {"mode": "Custom", "effects": {"Sparkles": True}}}, "not a known upstream effect"),
+        ({"desktopIcons": {"Nope": True}}, "not a known upstream value"),
+        ({"startFolders": ["Nope"]}, "not a known upstream value"),
+        ({"stickyKeys": {"mode": "Custom", "flags": ["Nope"]}}, "not a known upstream value"),
+        ({"stickyKeys": {"mode": "Disabled", "flags": []}}, "only used"),
+        ({"processAudit": "Loud"}, "processAudit"),
+    ],
+)
+def test_long_tail_settings_are_checked(gen, changes, message):
+    with pytest.raises(GeneratorError, match=re.escape(message)):
+        gen.generate(new_settings(**changes))
+
+
+def test_form_labels_name_real_effects_and_sticky_keys(gen):
+    from pathlib import Path
+
+    js = (Path(__file__).parent.parent / "app" / "static" / "unattend-generator.js").read_text()
+    schema = gen.schema()
+    for table, names in (("genEffectLabels", schema["visualEffects"]), ("genStickyLabels", schema["stickyKeys"])):
+        body = js.split(table + ": {", 1)[1].split("\n    },\n", 1)[0]
+        labelled = re.findall(r"^\s+([A-Za-z0-9]+): '", body, re.M)
+        assert labelled and len(labelled) == len(set(labelled)), table
+        assert set(labelled) <= set(names), (table, set(labelled) - set(names))
+
+
+# ----------------------------------------------------------- duplicate
+def test_duplicate_generated_template(admin, app, settings, unattendgen):
+    from app.models import UnattendGenerated
+
+    wanted = new_settings(**LONG_TAIL)
+    src = admin.post("/api/unattend/generator", json={"name": "Lab", "description": "d", "settings": wanted}).json()
+    r = admin.post(f"/api/unattend/{src['id']}/duplicate")
+    assert r.status_code == 201, r.text
+    dup = r.json()
+    assert dup["name"] == "Lab (copy)" and dup["description"] == "d" and dup["id"] != src["id"]
+    assert dup["generated"] is True and dup["stale"] is False and dup["settings"] == wanted
+    assert dup["filename"] != src["filename"]
+    assert (settings.configs_dir / dup["filename"]).read_bytes() == (settings.configs_dir / src["filename"]).read_bytes()
+    assert admin.post(f"/api/unattend/{src['id']}/duplicate").json()["name"] == "Lab (copy 2)"
+
+    # The copy is its own template: changing or deleting it leaves the original alone.
+    before = (settings.configs_dir / src["filename"]).read_bytes()
+    changed = new_settings(timeZone={"mode": "Explicit", "id": "UTC"})
+    assert admin.put(f"/api/unattend/generator/{dup['id']}", json={"name": "Lab 2", "settings": changed}).status_code == 200
+    assert admin.get(f"/api/unattend/{src['id']}").json()["settings"] == wanted
+    assert (settings.configs_dir / src["filename"]).read_bytes() == before
+    assert admin.delete(f"/api/unattend/{dup['id']}").status_code == 204
+    with app.state.sessionmaker() as db:
+        assert db.get(UnattendGenerated, src["id"]) is not None
+        assert db.get(UnattendGenerated, dup["id"]) is None
+
+    # A copy of a template from an older generator is not regenerated, so it is flagged too.
+    with app.state.sessionmaker() as db:
+        db.get(UnattendGenerated, src["id"]).upstream_commit = "0" * 40
+        db.commit()
+    old = admin.post(f"/api/unattend/{src['id']}/duplicate").json()
+    assert old["stale"] is True and old["engine_commit"] == "0" * 40

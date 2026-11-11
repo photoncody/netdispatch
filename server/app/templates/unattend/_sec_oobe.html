@@ -1,4 +1,4 @@
-{% from "unattend/_macros.html" import checkbox, radios, section %}
+{% from "unattend/_macros.html" import checkbox, note, radios, section, text, textarea %}
 {% call section('oobe', 'Setup experience') %}
   <div class="grid gap-4 sm:grid-cols-2">
     {{ radios('gen.f.expressSettings', [
@@ -9,7 +9,33 @@
     {{ radios('gen.f.wifi.mode', [
         ('Skip', 'Skip Wi-Fi setup'),
         ('Interactive', 'Ask during Setup'),
+        ('Profile', 'Connect to this network'),
+        ('ProfileXml', 'Use a WLAN profile (XML)'),
     ], legend='Wi-Fi') }}
+  </div>
+  <div x-show="gen.f.wifi.mode === 'Profile'" class="space-y-3">
+    <div class="grid gap-3 sm:grid-cols-3">
+      {{ text('gen.f.wifi.ssid', 'Network name (SSID)') }}
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Security
+        <select x-model="gen.f.wifi.authentication"
+                class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          <option value="Wpa2">WPA2-Personal</option>
+          <option value="Wpa3">WPA3-Personal</option>
+          <option value="Open">None (open network)</option>
+        </select>
+      </label>
+      <div x-show="gen.f.wifi.authentication !== 'Open'">{{ text('gen.f.wifi.password', 'Password', mono=True) }}</div>
+    </div>
+    <div class="grid gap-2 sm:grid-cols-2">
+      {{ checkbox('gen.f.wifi.connectAutomatically', 'Connect during installation') }}
+      {{ checkbox('gen.f.wifi.hidden', 'The network does not broadcast its name') }}
+    </div>
+    <div x-show="gen.f.wifi.authentication !== 'Open'">
+      {{ note('The Wi-Fi password is stored in the template and written into the answer file in plain text.') }}
+    </div>
+  </div>
+  <div x-show="gen.f.wifi.mode === 'ProfileXml'">
+    {{ textarea('gen.f.wifi.profileXml', 'WLAN profile', rows=8, help='As written by: netsh wlan export profile key=clear') }}
   </div>
   <div class="grid gap-2 border-t border-slate-800 pt-3 sm:grid-cols-2">
     {{ checkbox('gen.f.bypassNetworkCheck', 'Allow Setup to finish without internet', help='Windows 11 otherwise insists on a network connection during Setup.') }}

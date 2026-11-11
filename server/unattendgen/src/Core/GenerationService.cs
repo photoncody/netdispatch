@@ -109,6 +109,14 @@ public sealed class GenerationService
             }
         }
 
+        if (config.Wifi is { Mode: WifiMode.Profile, Profile.Password.Length: > 0 }
+            || (config.Wifi.Mode == WifiMode.ProfileXml && config.Wifi.ProfileXml?.Contains("keyMaterial", StringComparison.Ordinal) == true))
+        {
+            warnings.Add(config.KeepSensitiveFiles
+                ? @"The answer file contains the Wi-Fi password in plain text, and it stays in C:\Windows\Panther on the installed system."
+                : "The answer file contains the Wi-Fi password in plain text.");
+        }
+
         return warnings;
     }
 }
