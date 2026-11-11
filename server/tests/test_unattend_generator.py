@@ -133,6 +133,58 @@ def test_scripts_with_braces_survive(gen):
     assert rendered.replace(tpl.split("\r\n")[1] + "\r\n", "", 1) == raw
 
 
+def test_scripts_in_every_phase(gen):
+    phases = {
+        "System": ("Ps1", "Write-Output 'nd-system' | ForEach-Object { $_ }"),
+        "DefaultUser": ("Reg", 'Windows Registry Editor Version 5.00\r\n[HKEY_USERS\\DefaultUser\\nd-default]\r\n"a"="{{b}}"'),
+        "FirstLogon": ("Cmd", "echo nd-firstlogon {% x %}"),
+        "UserOnce": ("Vbs", 'WScript.Echo "nd-useronce {# c #}"'),
+    }
+    s = new_settings(scripts={
+        "items": [{"phase": p, "type": t, "content": c} for p, (t, c) in phases.items()],
+        "restartExplorer": True,
+    })
+    tpl, _ = gen.build_template(s)
+    rendered = render(tpl, sample_context())
+    ET.fromstring(rendered.encode())
+    for marker in ("nd-system", "nd-default", "nd-firstlogon {% x %}", "nd-useronce {# c #}", '"a"="{{b}}"'):
+        assert marker in rendered.replace("&quot;", '"'), marker
+
+
+def test_windows_settings(gen):
+    defaults = gen.schema()["defaults"]
+    assert defaults["hiddenFiles"] == "Default" and defaults["taskbarSearch"] == "Box"
+    plain, _ = gen.generate(NEW_TEMPLATE_SETTINGS)
+    assert "ShowSuperHidden" not in plain and "SearchboxTaskbarMode" not in plain
+    xml, _ = gen.generate(new_settings(hiddenFiles="ShowAll", taskbarSearch="Hide"))
+    assert "ShowSuperHidden" in xml
+    assert "-Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;" in xml
+    with pytest.raises(GeneratorError):
+        gen.generate(new_settings(taskbarSearch="Sideways"))
+
+
+def test_every_flag_and_bloatware_id_generates(gen):
+    schema = gen.schema()
+    s = new_settings(
+        flags={f["name"]: not f["default"] for f in schema["flags"]},
+        bloatware=[b["id"] for b in schema["bloatware"]],
+    )
+    tpl, _ = gen.build_template(s)
+    ET.fromstring(render(tpl, sample_context()).encode())
+
+
+def test_form_labels_name_real_flags(gen):
+    """A label for a flag the generator no longer has would silently drop out of the form."""
+    from pathlib import Path
+
+    js = (Path(__file__).parent.parent / "app" / "static" / "unattend-generator.js").read_text()
+    table = js.split("genFlagGroups: {", 1)[1].split("\n    },\n", 1)[0]
+    labelled = re.findall(r"^\s+\['([A-Za-z0-9]+)', ", table, re.M)
+    flags = {f["name"] for f in gen.schema()["flags"]}
+    assert len(labelled) == len(set(labelled)) >= 35
+    assert set(labelled) <= flags, set(labelled) - flags
+
+
 def test_invalid_settings_raise(gen):
     with pytest.raises(GeneratorError) as exc:
         gen.generate(new_settings(computerName={"mode": "Custom", "name": "has space"}))

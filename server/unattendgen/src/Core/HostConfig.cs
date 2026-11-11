@@ -39,6 +39,12 @@ public sealed record HostConfig
 
     public ExpressSettingsMode ExpressSettings { get; init; } = ExpressSettingsMode.DisableAll;
 
+    /// <summary>Which hidden files File Explorer shows, for every new user profile.</summary>
+    public HiddenFilesMode HiddenFiles { get; init; } = HiddenFilesMode.Default;
+
+    /// <summary>How search appears on the Windows 11 taskbar.</summary>
+    public TaskbarSearchMode TaskbarSearch { get; init; } = TaskbarSearchMode.Box;
+
     /// <summary>
     /// Upstream's plain on/off settings (for example "DisableUac"), by upstream's own name.
     /// Settings not listed keep upstream's default. The names a build accepts are listed by
@@ -65,6 +71,26 @@ public sealed record HostConfig
 public enum ProcessorArchitecture { X86, Amd64, Arm64 }
 
 public enum ExpressSettingsMode { Interactive, EnableAll, DisableAll }
+
+public enum HiddenFilesMode
+{
+    /// <summary>Windows' own behaviour: hidden files and protected system files stay hidden.</summary>
+    Default,
+    /// <summary>Show hidden files; protected system files stay hidden.</summary>
+    ShowHidden,
+    /// <summary>Show hidden files and protected system files.</summary>
+    ShowAll,
+}
+
+public enum TaskbarSearchMode
+{
+    /// <summary>Windows' own behaviour: the search box.</summary>
+    Box,
+    Hide,
+    Icon,
+    /// <summary>The search icon with a label.</summary>
+    Label,
+}
 
 // ---- Language, region, keyboard ----
 

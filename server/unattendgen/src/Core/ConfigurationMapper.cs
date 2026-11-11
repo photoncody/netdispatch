@@ -32,6 +32,21 @@ public sealed class ConfigurationMapper(U.UnattendGenerator generator)
                 ExpressSettingsMode.DisableAll => U.ExpressSettingsMode.DisableAll,
                 _ => throw new ArgumentOutOfRangeException(nameof(config), config.ExpressSettings, null),
             },
+            HideFiles = config.HiddenFiles switch
+            {
+                HiddenFilesMode.Default => U.HideModes.Hidden,
+                HiddenFilesMode.ShowHidden => U.HideModes.HiddenSystem,
+                HiddenFilesMode.ShowAll => U.HideModes.None,
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.HiddenFiles, null),
+            },
+            TaskbarSearch = config.TaskbarSearch switch
+            {
+                TaskbarSearchMode.Box => U.TaskbarSearchMode.Box,
+                TaskbarSearchMode.Hide => U.TaskbarSearchMode.Hide,
+                TaskbarSearchMode.Icon => U.TaskbarSearchMode.Icon,
+                TaskbarSearchMode.Label => U.TaskbarSearchMode.Label,
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.TaskbarSearch, null),
+            },
             KeepSensitiveFiles = config.KeepSensitiveFiles,
             BypassNetworkCheck = config.BypassNetworkCheck,
             Bloatwares = [.. config.Bloatware.Select(generator.Lookup<U.Bloatware>)],
