@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Drawing;
 using U = Schneegans.Unattend;
 
 namespace Netdispatch.UnattendGen;
@@ -51,6 +53,89 @@ public sealed class ConfigurationMapper(U.UnattendGenerator generator)
             BypassNetworkCheck = config.BypassNetworkCheck,
             Bloatwares = [.. config.Bloatware.Select(generator.Lookup<U.Bloatware>)],
             ScriptSettings = MapScripts(config.Scripts),
+            ProcessAuditSettings = config.ProcessAudit switch
+            {
+                ProcessAuditMode.Disabled => new U.DisabledProcessAuditSettings(),
+                ProcessAuditMode.Enabled => new U.EnabledProcessAuditSettings(IncludeCommandLine: false),
+                ProcessAuditMode.EnabledWithCommandLine => new U.EnabledProcessAuditSettings(IncludeCommandLine: true),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.ProcessAudit, null),
+            },
+            AppLockerSettings = config.AppLockerPolicy is { } policy
+                ? new U.ConfigureAppLockerSettings(PolicyXml: policy)
+                : new U.SkipAppLockerSettings(),
+            Components = MapComponents(config.Components),
+            LockKeySettings = config.LockKeys is { } keys
+                ? new U.ConfigureLockKeySettings(
+                    CapsLock: MapLockKey(keys.CapsLock),
+                    NumLock: MapLockKey(keys.NumLock),
+                    ScrollLock: MapLockKey(keys.ScrollLock))
+                : new U.SkipLockKeySettings(),
+            StickyKeysSettings = config.StickyKeys.Mode switch
+            {
+                StickyKeyMode.Default => new U.DefaultStickyKeysSettings(),
+                StickyKeyMode.Disabled => new U.DisabledStickyKeysSettings(),
+                StickyKeyMode.Custom => new U.CustomStickyKeysSettings(
+                    (config.StickyKeys.Flags ?? []).Select(UpstreamNames.Parse<U.StickyKeys>).ToHashSet()),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.StickyKeys.Mode, null),
+            },
+            WallpaperSettings = config.Wallpaper.Mode switch
+            {
+                WallpaperMode.Default => new U.DefaultWallpaperSettings(),
+                WallpaperMode.SolidColor => new U.SolidWallpaperSettings(ParseColor(config.Wallpaper.Color, "wallpaper.color")),
+                WallpaperMode.Script => new U.ScriptWallpaperSettings(Require(config.Wallpaper.Script, "wallpaper.script")),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.Wallpaper.Mode, null),
+            },
+            LockScreenSettings = config.LockScreenScript is { } lockScreen
+                ? new U.ScriptLockScreenSettings(Script: lockScreen)
+                : new U.DefaultLockScreenSettings(),
+            ColorSettings = config.Colors is { } colors
+                ? new U.CustomColorSettings(
+                    SystemTheme: MapTheme(colors.SystemTheme),
+                    AppsTheme: MapTheme(colors.AppsTheme),
+                    EnableTransparency: colors.Transparency,
+                    AccentColorOnStart: colors.AccentOnStart,
+                    AccentColorOnBorders: colors.AccentOnBorders,
+                    AccentColor: ParseColor(colors.AccentColor, "colors.accentColor"))
+                : new U.DefaultColorSettings(),
+            StartPinsSettings = config.StartPins.Mode switch
+            {
+                LayoutMode.Default => new U.DefaultStartPinsSettings(),
+                LayoutMode.Empty => new U.EmptyStartPinsSettings(),
+                LayoutMode.Custom => new U.CustomStartPinsSettings(Json: Require(config.StartPins.Content, "startPins.content")),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.StartPins.Mode, null),
+            },
+            StartTilesSettings = config.StartTiles.Mode switch
+            {
+                LayoutMode.Default => new U.DefaultStartTilesSettings(),
+                LayoutMode.Empty => new U.EmptyStartTilesSettings(),
+                LayoutMode.Custom => new U.CustomStartTilesSettings(Xml: Require(config.StartTiles.Content, "startTiles.content")),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.StartTiles.Mode, null),
+            },
+            TaskbarIcons = config.TaskbarIcons.Mode switch
+            {
+                LayoutMode.Default => new U.DefaultTaskbarIcons(),
+                LayoutMode.Empty => new U.EmptyTaskbarIcons(),
+                LayoutMode.Custom => new U.CustomTaskbarIcons(Xml: Require(config.TaskbarIcons.Content, "taskbarIcons.content")),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.TaskbarIcons.Mode, null),
+            },
+            Effects = config.VisualEffects.Mode switch
+            {
+                VisualEffectMode.Default => new U.DefaultEffects(),
+                VisualEffectMode.BestAppearance => new U.BestAppearanceEffects(),
+                VisualEffectMode.BestPerformance => new U.BestPerformanceEffects(),
+                VisualEffectMode.Custom => new U.CustomEffects(
+                    (config.VisualEffects.Effects ?? new Dictionary<string, bool>())
+                        .ToImmutableDictionary(e => UpstreamNames.Parse<U.Effect>(e.Key), e => e.Value)),
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.VisualEffects.Mode, null),
+            },
+            DesktopIcons = config.DesktopIcons is { } icons
+                ? new U.CustomDesktopIconSettings(icons.ToDictionary(i => generator.Lookup<U.DesktopIcon>(i.Key), i => i.Value))
+                : new U.DefaultDesktopIconSettings(),
+            StartFolderSettings = config.StartFolders is { } folders
+                ? new U.CustomStartFolderSettings(folders.ToDictionary(
+                    f => generator.StartFolders.TryGetValue(f, out var folder) ? folder : throw new U.ConfigurationException($"startFolders: {f} is not a known upstream value."),
+                    _ => true))
+                : new U.DefaultStartFolderSettings(),
         };
         return UpstreamFlags.Apply(mapped, config.Flags);
     }
@@ -104,12 +189,80 @@ public sealed class ConfigurationMapper(U.UnattendGenerator generator)
 
     private static U.IWifiSettings MapWifi(WifiOptions wifi)
     {
-        return wifi.Mode switch
+        switch (wifi.Mode)
         {
-            WifiMode.Interactive => new U.InteractiveWifiSettings(),
-            WifiMode.Skip => new U.SkipWifiSettings(),
-            _ => throw new ArgumentOutOfRangeException(nameof(wifi), wifi.Mode, null),
+            case WifiMode.Interactive:
+                return new U.InteractiveWifiSettings();
+
+            case WifiMode.Skip:
+                return new U.SkipWifiSettings();
+
+            case WifiMode.Profile:
+                var profile = wifi.Profile ?? throw new U.ConfigurationException("wifi.profile is required.");
+                return new U.ParameterizedWifiSettings(
+                    Name: profile.Ssid,
+                    Password: profile.Password,
+                    ConnectAutomatically: profile.ConnectAutomatically,
+                    Authentication: profile.Authentication switch
+                    {
+                        WifiAuthentication.Open => U.WifiAuthentications.Open,
+                        WifiAuthentication.Wpa2 => U.WifiAuthentications.WPA2PSK,
+                        WifiAuthentication.Wpa3 => U.WifiAuthentications.WPA3SAE,
+                        _ => throw new ArgumentOutOfRangeException(nameof(wifi), profile.Authentication, null),
+                    },
+                    NonBroadcast: profile.Hidden);
+
+            case WifiMode.ProfileXml:
+                return new U.XmlWifiSettings(Xml: Require(wifi.ProfileXml, "wifi.profileXml"));
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(wifi), wifi.Mode, null);
+        }
+    }
+
+    private ImmutableDictionary<U.ComponentAndPass, string> MapComponents(IReadOnlyList<CustomComponent> components)
+    {
+        var builder = ImmutableDictionary.CreateBuilder<U.ComponentAndPass, string>();
+        foreach (var item in components)
+        {
+            // Upstream's own spelling of the ID: lookups ignore case, the answer file does not.
+            var key = new U.ComponentAndPass(generator.Lookup<U.Component>(item.Component).Id, UpstreamNames.Parse<U.Pass>(item.Pass));
+            if (!builder.TryAdd(key, item.Xml))
+            {
+                throw new U.ConfigurationException($"components lists '{key.Component}' in the '{key.Pass}' pass more than once.");
+            }
+        }
+        return builder.ToImmutable();
+    }
+
+    private static U.LockKeySetting MapLockKey(LockKey key)
+    {
+        return new U.LockKeySetting(
+            Initial: key.On ? U.LockKeyInitial.On : U.LockKeyInitial.Off,
+            Behavior: key.Ignore ? U.LockKeyBehavior.Ignore : U.LockKeyBehavior.Toggle);
+    }
+
+    private static U.ColorTheme MapTheme(ThemeMode theme)
+    {
+        return theme switch
+        {
+            ThemeMode.Dark => U.ColorTheme.Dark,
+            ThemeMode.Light => U.ColorTheme.Light,
+            _ => throw new ArgumentOutOfRangeException(nameof(theme), theme, null),
         };
+    }
+
+    /// <summary>Reads "#rrggbb".</summary>
+    private static Color ParseColor(string? value, string field)
+    {
+        if (!UpstreamNames.IsHtmlColor(value))
+        {
+            throw new U.ConfigurationException($"{field} must be a colour written as #rrggbb.");
+        }
+        return Color.FromArgb(
+            Convert.ToInt32(value![1..3], 16),
+            Convert.ToInt32(value[3..5], 16),
+            Convert.ToInt32(value[5..7], 16));
     }
 
     private U.ILanguageSettings MapLanguage(LanguageOptions language)

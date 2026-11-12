@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "computerName": {
+    "mode": "Hostname"
+  },
+  "accounts": {
+    "mode": "Unattended",
+    "users": [
+      { "name": "labadmin", "displayName": "Lab Administrator", "password": "change-me", "group": "Administrators" }
+    ],
+    "autoLogon": "FirstAdministrator"
+  },
+  "wifi": {
+    "mode": "Profile",
+    "profile": { "ssid": "Lab Network", "authentication": "Wpa3", "password": "change-me-wifi", "connectAutomatically": true, "hidden": true }
+  },
+  "processAudit": "EnabledWithCommandLine",
+  "appLockerPolicy": "<AppLockerPolicy Version=\"1\"><RuleCollection Type=\"Exe\" EnforcementMode=\"AuditOnly\"><FilePathRule Id=\"921cc481-6e17-4653-8f75-050b80acca20\" Name=\"All files\" Description=\"\" UserOrGroupSid=\"S-1-1-0\" Action=\"Allow\"><Conditions><FilePathCondition Path=\"*\" /></Conditions></FilePathRule></RuleCollection></AppLockerPolicy>",
+  "components": [
+    { "component": "Microsoft-Windows-TerminalServices-LocalSessionManager", "pass": "specialize", "xml": "<fDenyTSConnections>false</fDenyTSConnections>" },
+    { "component": "Microsoft-Windows-Setup", "pass": "windowsPE", "xml": "<Diagnostics><OptIn>false</OptIn></Diagnostics>" }
+  ],
+  "lockKeys": {
+    "capsLock": { "on": false, "ignore": true },
+    "numLock": { "on": true, "ignore": false },
+    "scrollLock": { "on": false, "ignore": false }
+  },
+  "stickyKeys": {
+    "mode": "Custom",
+    "flags": [ "Indicator", "AudibleFeedback" ]
+  },
+  "wallpaper": {
+    "mode": "SolidColor",
+    "color": "#1B3A5C"
+  },
+  "lockScreenScript": "(Invoke-WebRequest -Uri 'https://example.com/lock.jpg' -UseBasicParsing).Content;",
+  "colors": {
+    "systemTheme": "Dark",
+    "appsTheme": "Light",
+    "transparency": false,
+    "accentOnStart": true,
+    "accentOnBorders": true,
+    "accentColor": "#FF8800"
+  },
+  "startPins": {
+    "mode": "Custom",
+    "content": "{\"pinnedList\":[{\"packagedAppId\":\"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel\"}]}"
+  },
+  "startTiles": {
+    "mode": "Empty"
+  },
+  "taskbarIcons": {
+    "mode": "Empty"
+  },
+  "visualEffects": {
+    "mode": "Custom",
+    "effects": { "FontSmoothing": true, "DragFullWindows": true, "ControlAnimations": false, "MenuAnimation": false }
+  },
+  "desktopIcons": { "ThisPC": true, "RecycleBin": true, "Network": false },
+  "startFolders": [ "Settings", "FileExplorer", "Downloads" ]
+}

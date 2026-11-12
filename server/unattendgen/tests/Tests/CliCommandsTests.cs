@@ -83,7 +83,7 @@ public class CliCommandsTests
         Assert.Contains("DisableUac", flags);
         Assert.DoesNotContain("KeepSensitiveFiles", flags);
 
-        foreach (var list in new[] { "imageLanguages", "userLocales", "keyboards", "geoLocations", "timeZones", "windowsEditions", "bloatware" })
+        foreach (var list in new[] { "imageLanguages", "userLocales", "keyboards", "geoLocations", "timeZones", "windowsEditions", "bloatware", "desktopIcons", "startFolders", "components", "visualEffects", "stickyKeys" })
         {
             Assert.NotEmpty(output.GetProperty(list).EnumerateArray());
         }

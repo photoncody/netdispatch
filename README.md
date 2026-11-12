@@ -453,7 +453,11 @@ The form covers:
 - the computer name and time zone;
 - user accounts, password expiry and account lockout;
 - app removal and custom scripts for each phase;
-- optional Windows settings, in groups: File Explorer, Start menu and taskbar, system, Windows Update, security, Microsoft Edge and virtual machine tools.
+- optional Windows settings, in groups: File Explorer, Start menu and taskbar, system, Windows Update, security, Microsoft Edge and virtual machine tools;
+- Wi-Fi: a network name and password, or a WLAN profile exported from another computer;
+- appearance: wallpaper (a colour, or an image a script fetches), lock screen image, light or dark theme and accent colour, visual effects, and desktop icons;
+- the Start menu and taskbar layout: pinned apps, tiles, taskbar icons, and the folders next to the power button;
+- advanced settings: Caps Lock, Num Lock and Scroll Lock, Sticky Keys, process auditing, an AppLocker policy, and your own XML for any answer-file component.
 
 How generated templates behave:
 - **Editing:** a generated template opens in the form again. Its XML is rewritten whenever you save it, so you can't edit the XML directly.
@@ -461,6 +465,8 @@ How generated templates behave:
 - **Escaped braces:** in a converted template, literal braces from the generated scripts appear as `{{ "{" }}`. That is how a brace is written in a template, and it becomes `{` again in the file each machine downloads.
 - **Placeholders in scripts:** write `__ND_HOSTNAME__` or `__ND_MAC_PLAIN__` in a custom script to get the machine's hostname or MAC address.
 - **Passwords:** account passwords are stored with the template and written into the answer file. Use passwords meant for the first logon and change them afterwards.
+- **Wi-Fi password:** a Wi-Fi network's password is stored with the template too, and written into the answer file in plain text.
+- **Copies:** **Duplicate** copies a template, raw or generated, as it was last saved. The copy of a generated template opens in the form.
 - **Upgrades:** when a newer netdispatch release updates the generator library, existing generated templates keep their file and keep working. They are marked **older** in the list until you open and save them.
 
 The generator library is [unattend-generator](https://github.com/cschneegans/unattend-generator) by Christoph Schneegans, MIT licence. Its notices are in [server/unattendgen/THIRD-PARTY-NOTICES.md](server/unattendgen/THIRD-PARTY-NOTICES.md).

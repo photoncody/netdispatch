@@ -32,6 +32,19 @@ public sealed class HostConfigValidator(UnattendGenerator generator)
         ValidateFlags(config.Flags, errors);
         ValidateBloatware(config.Bloatware, errors);
         ValidateScripts(config.Scripts, errors);
+        ValidateWifi(config.Wifi, errors);
+        ValidateComponents(config.Components, errors);
+        ValidateKeyboard(config, errors);
+        ValidateAppearance(config, errors);
+        ValidateLayout(config.StartPins, "startPins", errors);
+        ValidateStartPinsJson(config.StartPins, errors);
+        ValidateLayout(config.StartTiles, "startTiles", errors);
+        ValidateLayout(config.TaskbarIcons, "taskbarIcons", errors);
+        ValidateIconsAndFolders(config, errors);
+        if (config.AppLockerPolicy != null)
+        {
+            Required(config.AppLockerPolicy, "appLockerPolicy", errors);
+        }
 
         return errors;
     }
@@ -354,6 +367,231 @@ public sealed class HostConfigValidator(UnattendGenerator generator)
             {
                 errors.Add($"scripts.items[{i}].content must not be empty.");
             }
+        }
+    }
+
+    private static void ValidateWifi(WifiOptions wifi, List<string> errors)
+    {
+        if (wifi.Mode == WifiMode.ProfileXml)
+        {
+            // Upstream checks the XML against the WLAN profile schema.
+            Required(wifi.ProfileXml, "wifi.profileXml", errors);
+        }
+        else
+        {
+            Unused(wifi.ProfileXml, "wifi.profileXml", "wifi.mode is ProfileXml", errors);
+        }
+
+        if (wifi.Mode != WifiMode.Profile)
+        {
+            if (wifi.Profile != null)
+            {
+                errors.Add("wifi.profile is only used when wifi.mode is Profile.");
+            }
+            return;
+        }
+        if (wifi.Profile is not { } profile)
+        {
+            errors.Add("wifi.profile is required when wifi.mode is Profile.");
+            return;
+        }
+
+        if (profile.Ssid.Length == 0)
+        {
+            errors.Add("wifi.profile.ssid is required.");
+        }
+        else if (System.Text.Encoding.UTF8.GetByteCount(profile.Ssid) > 32)
+        {
+            errors.Add("wifi.profile.ssid must not be longer than 32 bytes.");
+        }
+        // The name ends up inside a double-quoted argument of netsh.exe.
+        if (profile.ConnectAutomatically && profile.Ssid.Contains('"'))
+        {
+            errors.Add("wifi.profile.ssid must not contain double quotes when wifi.profile.connectAutomatically is on.");
+        }
+
+        if (profile.Authentication == WifiAuthentication.Open)
+        {
+            if (profile.Password.Length > 0)
+            {
+                errors.Add("wifi.profile.password is only used when wifi.profile.authentication is Wpa2 or Wpa3.");
+            }
+        }
+        else if (profile.Password.Length is < 8 or > 64
+            || (profile.Password.Length == 64 && !profile.Password.All(Uri.IsHexDigit)))
+        {
+            errors.Add("wifi.profile.password must be 8 to 63 characters, or 64 hex digits.");
+        }
+    }
+
+    private void ValidateComponents(IReadOnlyList<CustomComponent> components, List<string> errors)
+    {
+        var seen = new HashSet<(string, string)>();
+        for (int i = 0; i < components.Count; i++)
+        {
+            var item = components[i];
+            string field = $"components[{i}]";
+            Known(generator.Components, item.Component, $"{field}.component", errors);
+            if (!UpstreamNames.IsKnown<Pass>(item.Pass))
+            {
+                errors.Add($"{field}.pass '{item.Pass}' is not a configuration pass.");
+            }
+            else if (generator.Components.TryGetValue(item.Component, out var component)
+                && !component.Passes.Contains(Enum.Parse<Pass>(item.Pass)))
+            {
+                errors.Add($"{field}: '{component.Id}' cannot be used in the '{item.Pass}' pass. It allows: {string.Join(", ", component.Passes)}.");
+            }
+            if (string.IsNullOrWhiteSpace(item.Xml))
+            {
+                errors.Add($"{field}.xml must not be empty.");
+            }
+            if (!seen.Add((item.Component.ToUpperInvariant(), item.Pass)))
+            {
+                errors.Add($"components lists '{item.Component}' in the '{item.Pass}' pass more than once.");
+            }
+        }
+    }
+
+    private static void ValidateKeyboard(HostConfig config, List<string> errors)
+    {
+        var sticky = config.StickyKeys;
+        if (sticky.Mode != StickyKeyMode.Custom)
+        {
+            if (sticky.Flags != null)
+            {
+                errors.Add("stickyKeys.flags is only used when stickyKeys.mode is Custom.");
+            }
+            return;
+        }
+        var flags = sticky.Flags ?? [];
+        for (int i = 0; i < flags.Count; i++)
+        {
+            if (!UpstreamNames.IsKnown<StickyKeys>(flags[i]))
+            {
+                errors.Add($"stickyKeys.flags[{i}] '{flags[i]}' is not a known upstream value.");
+            }
+        }
+        if (flags.Distinct(StringComparer.Ordinal).Count() != flags.Count)
+        {
+            errors.Add("stickyKeys.flags lists a value more than once.");
+        }
+    }
+
+    private static void ValidateAppearance(HostConfig config, List<string> errors)
+    {
+        var wallpaper = config.Wallpaper;
+        if (wallpaper.Mode == WallpaperMode.SolidColor)
+        {
+            HtmlColor(wallpaper.Color, "wallpaper.color", errors);
+        }
+        else
+        {
+            Unused(wallpaper.Color, "wallpaper.color", "wallpaper.mode is SolidColor", errors);
+        }
+        if (wallpaper.Mode == WallpaperMode.Script)
+        {
+            Required(wallpaper.Script, "wallpaper.script", errors);
+        }
+        else
+        {
+            Unused(wallpaper.Script, "wallpaper.script", "wallpaper.mode is Script", errors);
+        }
+
+        if (config.LockScreenScript != null)
+        {
+            Required(config.LockScreenScript, "lockScreenScript", errors);
+        }
+        if (config.Colors != null)
+        {
+            HtmlColor(config.Colors.AccentColor, "colors.accentColor", errors);
+        }
+
+        var effects = config.VisualEffects;
+        if (effects.Mode != VisualEffectMode.Custom)
+        {
+            if (effects.Effects != null)
+            {
+                errors.Add("visualEffects.effects is only used when visualEffects.mode is Custom.");
+            }
+        }
+        else if (effects.Effects is not { Count: > 0 })
+        {
+            errors.Add("visualEffects.effects is required when visualEffects.mode is Custom.");
+        }
+        else
+        {
+            foreach (var name in effects.Effects.Keys.Order(StringComparer.Ordinal))
+            {
+                if (!UpstreamNames.IsKnown<Effect>(name))
+                {
+                    errors.Add($"visualEffects.effects.{name} is not a known upstream effect.");
+                }
+            }
+        }
+    }
+
+    private static void ValidateLayout(LayoutOptions layout, string field, List<string> errors)
+    {
+        // Upstream checks that the content is well-formed JSON or XML.
+        if (layout.Mode == LayoutMode.Custom)
+        {
+            Required(layout.Content, $"{field}.content", errors);
+        }
+        else
+        {
+            Unused(layout.Content, $"{field}.content", $"{field}.mode is Custom", errors);
+        }
+    }
+
+    // Upstream only reads the text token by token, which lets truncated JSON through; Windows
+    // would then ignore the layout without a message.
+    private static void ValidateStartPinsJson(LayoutOptions pins, List<string> errors)
+    {
+        if (pins.Mode != LayoutMode.Custom || string.IsNullOrWhiteSpace(pins.Content))
+        {
+            return;
+        }
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(pins.Content);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                errors.Add("startPins.content must be a JSON object, such as {\"pinnedList\":[]}.");
+            }
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            errors.Add($"startPins.content is not valid JSON: {ex.Message}");
+        }
+    }
+
+    private void ValidateIconsAndFolders(HostConfig config, List<string> errors)
+    {
+        foreach (var id in (config.DesktopIcons?.Keys ?? []).Order(StringComparer.Ordinal))
+        {
+            Known(generator.DesktopIcons, id, $"desktopIcons.{id}", errors);
+        }
+        foreach (var duplicate in (config.DesktopIcons?.Keys ?? []).GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+        {
+            errors.Add($"desktopIcons lists '{duplicate.Key}' more than once.");
+        }
+
+        var folders = config.StartFolders ?? [];
+        for (int i = 0; i < folders.Count; i++)
+        {
+            Known(generator.StartFolders, folders[i], $"startFolders[{i}]", errors);
+        }
+        foreach (var duplicate in folders.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+        {
+            errors.Add($"startFolders lists '{duplicate.Key}' more than once.");
+        }
+    }
+
+    private static void HtmlColor(string? value, string field, List<string> errors)
+    {
+        if (!UpstreamNames.IsHtmlColor(value))
+        {
+            errors.Add($"{field} must be a colour written as #rrggbb.");
         }
     }
 

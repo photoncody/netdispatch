@@ -1,0 +1,32 @@
+{% from "unattend/_macros.html" import checkbox, id_checks, note, radios, section, textarea %}
+
+{#- Windows' own layout, an empty one, or a custom one typed below. -#}
+{% macro layout(model, legend, content_label, help) -%}
+<div class="space-y-2">
+  {{ radios(model ~ '.mode', [
+      ('Default', 'Windows\' own'),
+      ('Empty', 'Nothing pinned'),
+      ('Custom', 'Custom'),
+  ], legend=legend) }}
+  <div x-show="{{ model }}.mode === 'Custom'">{{ textarea(model ~ '.content', content_label, rows=6, help=help) }}</div>
+</div>
+{%- endmacro %}
+
+{% call section('layout', 'Start menu and taskbar layout') %}
+  {{ note('Everything here is optional and applies to every new user profile.') }}
+  {{ layout('gen.f.startPins', 'Pinned apps in Start (Windows 11)', 'Pinned list (JSON)',
+            'The pinnedList JSON of the ConfigureStartPins policy.') }}
+  <div class="border-t border-slate-800 pt-3">
+    {{ layout('gen.f.taskbarIcons', 'Taskbar icons', 'Taskbar layout (XML)',
+              'A LayoutModificationTemplate with a CustomTaskbarLayoutCollection.') }}
+  </div>
+  <div class="border-t border-slate-800 pt-3">
+    {{ layout('gen.f.startTiles', 'Start menu tiles (Windows 10)', 'Start layout (XML)',
+              'A LayoutModificationTemplate, as written by Export-StartLayout.') }}
+  </div>
+  <div class="space-y-3 border-t border-slate-800 pt-3">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Folders next to the power button (Windows 11)</h4>
+    {{ checkbox('gen.f.startFolders.on', 'Choose the folders', help='With none ticked, no folder is shown.') }}
+    <div x-show="gen.f.startFolders.on">{{ id_checks('gen.schema.startFolders', 'gen.f.startFolders.items') }}</div>
+  </div>
+{% endcall %}

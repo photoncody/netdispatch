@@ -7,6 +7,9 @@ public sealed record CatalogItem(string Id, string DisplayName);
 /// <summary>A user locale with the keyboard and home location upstream suggests for it.</summary>
 public sealed record LocaleItem(string Id, string DisplayName, string? Keyboard, string? GeoLocation);
 
+/// <summary>An answer-file component and the configuration passes it may appear in.</summary>
+public sealed record ComponentItem(string Id, IReadOnlyList<string> Passes);
+
 /// <summary>
 /// The lists of choices the UI offers, taken from upstream's own data so they stay in sync
 /// when upstream is bumped. Nothing here is hardcoded.
@@ -38,6 +41,17 @@ public sealed class UpstreamCatalog(UnattendGenerator generator)
 
     public IReadOnlyList<CatalogItem> Bloatwares { get; } =
         Sorted(generator.Bloatwares.Values.Select(x => new CatalogItem(x.Id, x.DisplayName)));
+
+    public IReadOnlyList<CatalogItem> DesktopIcons { get; } =
+        Sorted(generator.DesktopIcons.Values.Select(x => new CatalogItem(x.Id, x.DisplayName)));
+
+    public IReadOnlyList<CatalogItem> StartFolders { get; } =
+        Sorted(generator.StartFolders.Values.Select(x => new CatalogItem(x.Id, x.DisplayName)));
+
+    public IReadOnlyList<ComponentItem> Components { get; } =
+        [.. generator.Components.Values
+            .Select(x => new ComponentItem(x.Id, [.. x.Passes.Select(p => p.ToString())]))
+            .OrderBy(x => x.Id, StringComparer.OrdinalIgnoreCase)];
 
     private static List<CatalogItem> Sorted(IEnumerable<CatalogItem> items)
     {

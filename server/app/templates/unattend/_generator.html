@@ -19,6 +19,7 @@
       </label>
     </div>
     <div class="flex flex-wrap gap-2">
+      <button type="button" x-show="gen.id" @click="duplicateUnattend(gen.id)" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500" title="Copy this template as it was last saved">Duplicate</button>
       <button type="button" x-show="gen.id" @click="detachGenerated()" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-slate-500" title="Keep the XML as it is and edit it by hand from now on">Convert to raw XML</button>
       <button type="button" x-show="gen.id" @click="deleteGenerated()" class="rounded-md border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:border-rose-400">Delete</button>
       <button type="button" @click="saveGenerated()" :disabled="gen.saving"
@@ -48,6 +49,9 @@
       {% include "unattend/_sec_bloatware.html" %}
       {% include "unattend/_sec_scripts.html" %}
       {% include "unattend/_sec_switches.html" %}
+      {% include "unattend/_sec_look.html" %}
+      {% include "unattend/_sec_layout.html" %}
+      {% include "unattend/_sec_advanced.html" %}
     </div>
 
     <div class="xl:sticky xl:top-20 xl:self-start">

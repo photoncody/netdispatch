@@ -78,6 +78,17 @@ def _check_name(db: Session, name: str, exclude_id: int | None = None) -> str:
     return name
 
 
+def _copy_name(db: Session, name: str) -> str:
+    """``<name> (copy)``, then ``(copy 2)`` and so on, within the 200-character limit."""
+    n = 1
+    while True:
+        suffix = " (copy)" if n == 1 else f" (copy {n})"
+        candidate = name[: 200 - len(suffix)].rstrip() + suffix
+        if not db.query(UnattendConfig).filter(UnattendConfig.name == candidate).count():
+            return candidate
+        n += 1
+
+
 def _generator(request: Request) -> UnattendGenerator:
     return request.app.state.unattend_generator
 
@@ -255,6 +266,37 @@ def preview(cfg_id: int, request: Request, device_id: int | None = None, db: Ses
     except TemplateError as exc:
         raise HTTPException(422, f"template error: {exc}") from exc
     return {"rendered": rendered, "context": ctx}
+
+
+@router.post("/{cfg_id}/duplicate", status_code=201)
+def duplicate(cfg_id: int, request: Request, db: Session = Depends(get_db)):
+    """Copy a template under a new name. A generated template's copy is generated too: it
+    gets the same settings and the same file, without running the generator."""
+    settings: Settings = request.app.state.settings
+    cfg = _get(db, cfg_id)
+    content = read_template(settings, cfg)
+    if content is None:
+        raise HTTPException(404, "template file is missing")
+    name = _copy_name(db, cfg.name)
+    copy = UnattendConfig(name=name, filename=_unique_filename(db, name), description=cfg.description)
+    db.add(copy)
+    db.flush()
+    row = db.get(UnattendGenerated, cfg.id)
+    copy_row = None
+    if row is not None:
+        copy_row = UnattendGenerated(
+            unattend_id=copy.id,
+            settings_json=row.settings_json,
+            schema_version=row.schema_version,
+            upstream_commit=row.upstream_commit,
+        )
+        db.add(copy_row)
+    write_template(settings, copy, content)
+    db.commit()
+    out = unattend_out(copy, content, copy_row, _engine_commit(request) if copy_row else None)
+    if copy_row is not None:
+        out["settings"] = copy_row.settings
+    return out
 
 
 @router.post("/{cfg_id}/detach")

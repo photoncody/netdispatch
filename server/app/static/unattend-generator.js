@@ -18,7 +18,11 @@ function unattendGenerator() {
   const emptySchema = {
     loaded: false, defaults: {}, newTemplate: {}, flags: [], imageLanguages: [], userLocales: [],
     keyboards: [], geoLocations: [], timeZones: [], windowsEditions: [], bloatware: [],
+    desktopIcons: [], startFolders: [], components: [], visualEffects: [], stickyKeys: [],
   };
+  // Windows' own layout, nothing pinned, or the layout typed into the form.
+  const layout = (v) => ({ mode: (v && v.mode) || 'Default', content: str(v && v.content) });
+  const lockKey = (v) => ({ on: !!(v && v.on), ignore: !!(v && v.ignore) });
 
   return {
     gen: {
@@ -29,8 +33,38 @@ function unattendGenerator() {
     genSections: [
       ['region', 'Language'], ['setup', 'PE stage'], ['identity', 'Name and time zone'],
       ['accounts', 'Accounts'], ['oobe', 'Setup experience'], ['bloatware', 'Apps'],
-      ['scripts', 'Scripts'], ['switches', 'Windows settings'],
+      ['scripts', 'Scripts'], ['switches', 'Windows settings'], ['look', 'Appearance'],
+      ['layout', 'Start and taskbar'], ['advanced', 'Advanced'],
     ],
+    // Labels for names the generator lists (schema.visualEffects, schema.stickyKeys). A name
+    // without a label here still shows, by its own name.
+    genEffectLabels: {
+      ControlAnimations: 'Animate controls and elements inside windows',
+      AnimateMinMax: 'Animate windows when minimising and maximising',
+      TaskbarAnimations: 'Animations in the taskbar',
+      DWMAeroPeekEnabled: 'Peek at the desktop',
+      MenuAnimation: 'Fade or slide menus into view',
+      TooltipAnimation: 'Fade or slide tooltips into view',
+      SelectionFade: 'Fade out menu items after clicking',
+      DWMSaveThumbnailEnabled: 'Save taskbar thumbnail previews',
+      CursorShadow: 'Shadow under the mouse pointer',
+      ListviewShadow: 'Drop shadows for icon labels on the desktop',
+      ThumbnailsOrIcon: 'Show thumbnails instead of icons',
+      ListviewAlphaSelect: 'Translucent selection rectangle',
+      DragFullWindows: 'Show window contents while dragging',
+      ComboBoxAnimation: 'Slide open drop-down lists',
+      FontSmoothing: 'Smooth the edges of screen fonts',
+      ListBoxSmoothScrolling: 'Smooth-scroll list boxes',
+      DropShadow: 'Shadows under windows',
+    },
+    genStickyLabels: {
+      HotKeyActive: 'Pressing Shift five times turns Sticky Keys on',
+      Indicator: 'Show the Sticky Keys icon on the taskbar',
+      TriState: 'Pressing a modifier key twice locks it',
+      TwoKeysOff: 'Turn Sticky Keys off when two keys are pressed at once',
+      AudibleFeedback: 'Play a sound when a modifier key is pressed',
+      HotKeySound: 'Play a sound when the shortcut turns Sticky Keys on or off',
+    },
     // Flags that have a place of their own in the form ("Setup experience").
     genPlacedFlags: ['HidePowerShellWindows', 'UseNarrator'],
     // Labels for the generator's on/off settings, by group: [name, label, help]. The group
@@ -159,6 +193,25 @@ function unattendGenerator() {
       const pe = m.passwordExpiration || {};
       const lo = m.lockout || {};
       const scripts = m.scripts || {};
+      const wifi = m.wifi || {};
+      const wp = wifi.profile || {};
+      const lk = m.lockKeys || {};
+      const sticky = m.stickyKeys || {};
+      const wall = m.wallpaper || {};
+      const col = m.colors || {};
+      const fx = m.visualEffects || {};
+      const sch = this.gen.schema;
+      // One on/off value per name the generator lists. With nothing stored, the form shows
+      // what Windows does by itself.
+      const checks = (names, stored, initial) => Object.fromEntries(names.map((n) => [n, stored ? !!stored(n) : initial(n)]));
+      // The generator matches catalog ids without regard to case. The form compares them
+      // exactly, so stored ids take the spelling the schema lists.
+      const canon = (items, id) => (items.find((i) => i.id.toLowerCase() === String(id).toLowerCase()) || { id }).id;
+      const icons = m.desktopIcons && Object.fromEntries(Object.entries(m.desktopIcons).map(([id, v]) => [canon(sch.desktopIcons, id), v]));
+      const folders = m.startFolders && m.startFolders.map((id) => canon(sch.startFolders, id));
+      // Custom without flags means no option is on. Every box is ticked only when the
+      // stored mode is another one, as the starting point for switching to Custom.
+      const stickyFlags = sticky.mode === 'Custom' ? (sticky.flags || []) : null;
       const arch = m.processorArchitectures || ['Amd64'];
       const locales = (lang.locales && lang.locales.length ? lang.locales : [{ locale: 'en-US', keyboard: '00000409' }]);
       const flags = {};
@@ -239,14 +292,58 @@ function unattendGenerator() {
           durationMinutes: lo.durationMinutes ?? 10,
           windowMinutes: lo.windowMinutes ?? 10,
         },
-        wifi: { mode: (m.wifi && m.wifi.mode) || 'Interactive' },
+        wifi: {
+          mode: wifi.mode || 'Interactive',
+          ssid: str(wp.ssid),
+          authentication: wp.authentication || 'Wpa2',
+          password: str(wp.password),
+          connectAutomatically: wp.connectAutomatically ?? true,
+          hidden: !!wp.hidden,
+          profileXml: str(wifi.profileXml),
+        },
+        processAudit: m.processAudit || 'Disabled',
+        appLocker: { on: m.appLockerPolicy != null, xml: str(m.appLockerPolicy) },
+        components: (m.components || []).map((c) => ({ component: canon(sch.components, c.component), pass: c.pass, xml: str(c.xml), _k: key() })),
+        lockKeys: { on: !!m.lockKeys, capsLock: lockKey(lk.capsLock), numLock: lockKey(lk.numLock), scrollLock: lockKey(lk.scrollLock) },
+        stickyKeys: {
+          mode: sticky.mode || 'Default',
+          flags: checks(sch.stickyKeys, stickyFlags && ((n) => stickyFlags.includes(n)), () => true),
+        },
+        wallpaper: { mode: wall.mode || 'Default', color: wall.color || '#000000', script: str(wall.script) },
+        lockScreen: { on: m.lockScreenScript != null, script: str(m.lockScreenScript) },
+        colors: {
+          on: !!m.colors,
+          systemTheme: col.systemTheme || 'Light',
+          appsTheme: col.appsTheme || 'Light',
+          transparency: col.transparency ?? true,
+          accentOnStart: !!col.accentOnStart,
+          accentOnBorders: !!col.accentOnBorders,
+          accentColor: col.accentColor || '#0078D4',
+        },
+        startPins: layout(m.startPins),
+        startTiles: layout(m.startTiles),
+        taskbarIcons: layout(m.taskbarIcons),
+        effects: {
+          mode: fx.mode || 'Default',
+          // An effect the stored settings leave out is left alone by the generator; the form
+          // has no third state, so it shows as on.
+          items: checks(sch.visualEffects, fx.effects && ((n) => fx.effects[n] ?? true), () => true),
+        },
+        desktopIcons: {
+          on: !!m.desktopIcons,
+          items: checks(sch.desktopIcons.map((i) => i.id), icons && ((n) => icons[n] ?? n === 'RecycleBin'), (n) => n === 'RecycleBin'),
+        },
+        startFolders: {
+          on: m.startFolders != null,
+          items: checks(sch.startFolders.map((i) => i.id), folders && ((n) => folders.includes(n)), () => false),
+        },
         expressSettings: m.expressSettings || 'DisableAll',
         hiddenFiles: m.hiddenFiles || 'Default',
         taskbarSearch: m.taskbarSearch || 'Box',
         keepSensitiveFiles: !!m.keepSensitiveFiles,
         bypassNetworkCheck: !!m.bypassNetworkCheck,
         flags,
-        bloatware: [...(m.bloatware || [])],
+        bloatware: (m.bloatware || []).map((id) => canon(sch.bloatware, id)),
         scripts: {
           items: (scripts.items || []).map((x) => ({ phase: x.phase, type: x.type, content: str(x.content), _k: key() })),
           restartExplorer: !!scripts.restartExplorer,
@@ -340,6 +437,14 @@ function unattendGenerator() {
         });
       }
       s.wifi = { mode: f.wifi.mode };
+      if (f.wifi.mode === 'Profile') {
+        s.wifi.profile = {
+          ssid: f.wifi.ssid, authentication: f.wifi.authentication,
+          connectAutomatically: !!f.wifi.connectAutomatically, hidden: !!f.wifi.hidden,
+        };
+        if (f.wifi.authentication !== 'Open') s.wifi.profile.password = f.wifi.password;
+      }
+      if (f.wifi.mode === 'ProfileXml') s.wifi.profileXml = f.wifi.profileXml;
       s.expressSettings = f.expressSettings;
       if (f.hiddenFiles !== 'Default') s.hiddenFiles = f.hiddenFiles;
       if (f.taskbarSearch !== 'Box') s.taskbarSearch = f.taskbarSearch;
@@ -355,6 +460,44 @@ function unattendGenerator() {
       if (f.bloatware.length) s.bloatware = [...f.bloatware];
       const items = f.scripts.items.filter((x) => x.content.trim()).map((x) => ({ phase: x.phase, type: x.type, content: x.content }));
       if (items.length || f.scripts.restartExplorer) s.scripts = { items, restartExplorer: !!f.scripts.restartExplorer };
+
+      const on = (o) => Object.keys(o).filter((n) => o[n]);
+      if (f.wallpaper.mode === 'SolidColor') s.wallpaper = { mode: 'SolidColor', color: f.wallpaper.color.trim() };
+      if (f.wallpaper.mode === 'Script') s.wallpaper = { mode: 'Script', script: f.wallpaper.script };
+      if (f.lockScreen.on) s.lockScreenScript = f.lockScreen.script;
+      if (f.colors.on) {
+        const c = f.colors;
+        s.colors = {
+          systemTheme: c.systemTheme, appsTheme: c.appsTheme, transparency: !!c.transparency,
+          accentOnStart: !!c.accentOnStart, accentOnBorders: !!c.accentOnBorders, accentColor: c.accentColor.trim(),
+        };
+      }
+      if (f.effects.mode !== 'Default') {
+        s.visualEffects = { mode: f.effects.mode };
+        if (f.effects.mode === 'Custom') {
+          s.visualEffects.effects = Object.fromEntries(Object.entries(f.effects.items).map(([n, v]) => [n, !!v]));
+        }
+      }
+      if (f.desktopIcons.on) s.desktopIcons = Object.fromEntries(Object.entries(f.desktopIcons.items).map(([n, v]) => [n, !!v]));
+      for (const k of ['startPins', 'startTiles', 'taskbarIcons']) {
+        if (f[k].mode === 'Empty') s[k] = { mode: 'Empty' };
+        if (f[k].mode === 'Custom') s[k] = { mode: 'Custom', content: f[k].content };
+      }
+      if (f.startFolders.on) s.startFolders = on(f.startFolders.items);
+      if (f.lockKeys.on) {
+        const k = f.lockKeys;
+        s.lockKeys = {
+          capsLock: { on: !!k.capsLock.on, ignore: !!k.capsLock.ignore },
+          numLock: { on: !!k.numLock.on, ignore: !!k.numLock.ignore },
+          scrollLock: { on: !!k.scrollLock.on, ignore: !!k.scrollLock.ignore },
+        };
+      }
+      if (f.stickyKeys.mode === 'Disabled') s.stickyKeys = { mode: 'Disabled' };
+      if (f.stickyKeys.mode === 'Custom') s.stickyKeys = { mode: 'Custom', flags: on(f.stickyKeys.flags) };
+      if (f.processAudit !== 'Disabled') s.processAudit = f.processAudit;
+      if (f.appLocker.on) s.appLockerPolicy = f.appLocker.xml;
+      const components = f.components.filter((c) => c.xml.trim()).map((c) => ({ component: c.component, pass: c.pass, xml: c.xml }));
+      if (components.length) s.components = components;
       return s;
     },
 
@@ -373,6 +516,25 @@ function unattendGenerator() {
     },
     genAddScript() {
       this.gen.f.scripts.items.push({ phase: 'FirstLogon', type: 'Ps1', content: '', _k: key() });
+    },
+    // Passes the generator allows for a component.
+    genComponentPasses(id) {
+      const c = this.gen.schema.components.find((x) => x.id === id);
+      return c ? c.passes : [];
+    },
+    genComponentChanged(row) {
+      const passes = this.genComponentPasses(row.component);
+      if (!passes.includes(row.pass)) row.pass = passes.includes('specialize') ? 'specialize' : (passes[0] || '');
+    },
+    genAddComponent() {
+      const row = { component: 'Microsoft-Windows-Shell-Setup', pass: 'specialize', xml: '', _k: key() };
+      if (!this.genComponentPasses(row.component).length && this.gen.schema.components.length) row.component = this.gen.schema.components[0].id;
+      this.genComponentChanged(row);
+      this.gen.f.components.push(row);
+    },
+    // names: a list from the schema; labels: one of the label tables above.
+    genNamed(names, labels) {
+      return names.map((name) => ({ name, label: labels[name] || name.replace(/([a-z0-9])([A-Z])/g, '$1 $2') }));
     },
     genRemove(list, i) {
       list.splice(i, 1);
@@ -440,6 +602,16 @@ function unattendGenerator() {
       } finally {
         this.gen.saving = false;
       }
+    },
+
+    // Copies the template as it was last saved; works for raw XML templates too.
+    async duplicateUnattend(id) {
+      try {
+        const res = await this.api('POST', `/api/unattend/${id}/duplicate`);
+        await this.loadUnattends();
+        this.toast('Copied as ' + res.name);
+        this.editUnattend(res);
+      } catch (e) { this.toast(e.message, true); }
     },
 
     async detachGenerated() {
