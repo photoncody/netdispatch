@@ -584,6 +584,19 @@ docker logs -f netdispatch-relay         # on a relay host: every DHCP/TFTP exch
 | Sign-in loops back to SSO, or *SSO failed* | The redirect URI in the IdP doesn't match `PUBLIC_URL/auth/oidc/callback`, or `PUBLIC_URL` is wrong. Use `/login?local=true` to get in meanwhile. |
 | Signed in but immediately signed out again | You're using a different address than `PUBLIC_URL`. Over plain HTTP, a secure (HTTPS) session cookie isn't kept. |
 
+### Known issue: Hiren's BootCD PE on newer Q35 VMs
+
+Hiren's BootCD PE 1.0.8 can fail with `0xc0000428` naming `\windows\System32\drivers\cdrom.sys` on a **4 GiB Q35 VM with Secure Boot enabled**, even when the ISO and downloaded boot files are intact. This was reproduced with Proxmox QEMU 11.1.3, OVMF and `pc-q35-11.1`; `pc-q35-10.2` was also reported to fail.
+
+The verified workarounds are:
+
+- Use the `pc-q35-10.0` machine type with 4 GiB RAM. This was confirmed through to the Hiren's desktop on Proxmox.
+- Give the VM **6 GiB RAM** while retaining `pc-q35-11.1`. This passed the boot-driver stage and entered Hiren's initialization in the isolated test.
+
+**Secure Boot can stay enabled with either workaround.** Apply the change to the affected VM; a host-wide QEMU downgrade is not needed.
+
+The issue is sensitive to the newer Q35 SMM memory reservation: restoring its older 16 MiB reservation, instead of the newer 64 MiB default, also cleared the error in the isolated test. The precise failure inside Windows or wimboot remains untraced, and there is currently no validated NetDispatch code fix. These findings concern this tested combination, rather than every `0xc0000428` error.
+
 ## Configuration reference
 
 Settings are environment variables, written out with comments in the compose files themselves:

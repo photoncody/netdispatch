@@ -235,6 +235,7 @@ Verified with this harness:
 - **Don't enable the cache on the hub-local relay:** smbd on the host network clashes with the samba container's published port 445.
 
 **Windows / SMB**
+- **Hiren's PE 1.0.8 / newer Q35 / 4 GiB:** Secure Boot can fail at `cdrom.sys` with `0xc0000428` even with byte-identical official ISO, WIM, BCD, SDI and wimboot files. Reproduced in an isolated nested VM with Proxmox QEMU 11.1.3, OVMF 4.2026.08-1 and `pc-q35-11.1`, using a copy of the failing VM's EFI variables and its CPU feature set. The same QEMU build boots with `pc-q35-10.0` at 4 GiB (also confirmed to the desktop by the user), or `pc-q35-11.1` at 6 GiB (boot-driver stage passed). Changing only `mch.extended-tseg-mbytes` from the new 64 MiB default to 16 MiB also clears it in the lab; QEMU's `pc_compat_10_1` retains that older reservation. The user also confirmed `pc-q35-10.2` fails. The internal Windows/wimboot failure is not traced, so do not claim invalid signatures or demonstrated memory corruption, or bypass signature verification as a fix. See the README's known issue for supported workarounds.
 - **Samba must allow execute.** Extracted files are 0644, so the share sets `acl allow execute always = yes`. Without it, WinPE says *Access is denied* on `setup.exe`.
 - **Windows 11 24H2+ WinPE refuses guest SMB and requires signing.** That's why the share requires a user and SMB2+.
 - **wimboot injects files into `X:\Windows\System32`.**
