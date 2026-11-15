@@ -39,6 +39,9 @@ Boot chain:
 | `server/app/iso_tools.py` | 7-Zip extraction (background threads), layout detection, `resolve_ci()` safe paths |
 | `server/app/relay_cache.py` | relay cache: per-image manifests + etags (`ManifestCache`), `usable_cache()` routing decision, heartbeat cache reports |
 | `server/app/winpe.py` | `winpeshl.ini` + `netdispatch.cmd` (net use + `setup.exe /unattend`) |
+| `server/app/usb_scripts.py` | iPXE text for boot media: the media script (stands in for the relay's `netdispatch.ipxe`) and `/usb/boot`'s hand-off to `/boot` |
+| `server/app/usb_media.py` | builds and caches the online-only boot ISO (xorriso + mtools, no root) |
+| `server/app/routers/usb.py` | `/usb/boot` (unauthenticated: picks the client's relay), `/api/usb/info`, `/api/usb/online.iso` |
 | `server/app/unattend.py` | template files in `data/configs`, sandboxed Jinja rendering (CRLF kept), XML validation, `computer_name()` for `{{ hostname }}` |
 | `server/app/unattend_generator.py` | runs `netdispatch-unattendgen`, escapes its XML for Jinja, swaps `__ND_*__` placeholders for template variables, `NEW_TEMPLATE_SETTINGS` |
 | `server/app/templates/unattend/` | the generator form: `_generator.html`, one `_sec_*.html` per section, `_macros.html` for the controls |
@@ -73,6 +76,7 @@ The server Dockerfile's stages:
 - `assets`: Tailwind CLI, Alpine.js and wimboot, each SHA-pinned.
 - `unattendgen-base` / `unattendgen`: the .NET SDK (pinned by digest) fetches the upstream library and publishes `netdispatch-unattendgen` as one self-contained file for the target architecture. It cross-compiles on the build platform, so arm64 needs no emulation.
 - `unattendgen-test`: runs the generator's .NET tests. CI builds it; the runtime image does not depend on it.
+- `ipxe-signed` (the signed shim + `ipxe.efi`, same pins as `relay/Dockerfile`: keep them in step) and `ipxe-media` (`ipxe.lkrn` and `ipxe-native.efi` from source) supply the boot media's files in `/opt/netdispatch/usb/`, beside ISOLINUX from Debian.
 - `test` and `runtime`. `runtime` is the last stage and therefore the default target.
 
 The generator's .NET tests on their own: `docker build --target unattendgen-test server/`. On a machine with the .NET 10 SDK: `server/unattendgen/fetch-upstream.sh && dotnet test --solution server/unattendgen/Unattendgen.slnx`. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
@@ -148,6 +152,10 @@ Verified with this harness:
   - the DHCP fallback when `autoexec.ipxe` is missing;
   - the Windows 11 unattended install;
   - BIOS and non-Secure Boot UEFI clients, unchanged, on the same relay.
+- The online-only boot ISO (`vm.sh iso-uefi`, `iso-uefi-sb`, `iso-bios`, `iso-uefi-native`, with `/api/usb/online.iso` saved to `/var/tmp/netdispatch-online.iso`):
+  - all four reach the hold loop, recorded under the relay that answered by ProxyDHCP;
+  - local boot: UEFI exits 1 and the firmware moves on to its next entry; BIOS runs `sanboot` on drive 0x80;
+  - `iso-uefi-native` (no firmware driver for the NIC) chains the native-driver iPXE; the same machine with Secure Boot enforced is refused and shows the explanation.
 - With a caching relay (`RELAY_CACHE=true`):
   - the sync of Windows 11 and Debian netinst, with every cached file byte-identical to the hub's;
   - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
@@ -171,7 +179,8 @@ Verified with this harness:
 2. **Local boot = exit with a failure status, end to end.**
    - UEFI firmware only tries the next boot entry when a boot option *fails*. A successful return drops EDK2 into its setup menu. The original bug was exactly this: it worked on SeaBIOS and broke on OVMF.
    - The mechanism: `render_local()` does `set nd-local 1` and `exit 0`. The relay's `netdispatch.ipxe` and `embed.ipxe` both check `isset ${nd-local}` and `exit 1`. Any other return means "hub unreachable", so they retry.
-   - **This logic spans three files** (`pxe_engine.py`, `relay/entrypoint.sh` heredoc, `relay/ipxe/embed.ipxe`). Change them together.
+   - **This logic spans three files** (`pxe_engine.py`, `relay/entrypoint.sh` heredoc, `relay/ipxe/embed.ipxe`), plus the boot-media script in `usb_scripts.py`. Change them together.
+   - Boot media follow the same rule on UEFI (`exit 1`). The BIOS media script was loaded by ISOLINUX as a kernel and has nothing to return to, so it runs `sanboot --no-describe --drive 0x80` instead.
    - The Secure Boot path uses the same `embed.ipxe` (as `autoexec.ipxe`). Its `exit 1` makes the signed iPXE fail, the shim passes the failure on, and the firmware tries the next entry. This was verified on OVMF with Secure Boot enforced.
 3. **The wait loop uses `chain --replace --autofree`.**
    - Without `--replace`, every poll nests a script and iPXE eventually runs out of memory.
@@ -222,6 +231,15 @@ Verified with this harness:
   - `pxe-service` basenames that contain a dot are used verbatim, while names without one get `.0` appended.
   - `port=0` disables DNS. Keep it, since relays must not answer DNS.
 - **Relays need `network_mode: host` + `NET_ADMIN`.** Docker Desktop can't receive DHCP broadcasts.
+
+**Boot media**
+- **How a media client finds its relay.** The media script sends `relay_ip=${proxydhcp/dhcp-server}` to `/usb/boot`: iPXE's DHCP request carries `PXEClient`, so a relay on the subnet answers with ProxyDHCP and option 54 is its interface address, which its heartbeat reports as `ip_address`. Failing that, the client IP is matched against the relays' reported `subnet` (`relay_cache.relay_for_client()`: most specific wins, `/0` and unparsable values never match). `/usb/boot` then chains `/boot?…&relay=<id>`, or `relay=-` when there's none: `-` clears a relay recorded by an earlier PXE boot, so a stale relay's cache isn't offered to a client that can't reach it. No relay change is needed.
+- **UEFI media boot the signed `ipxe.efi`, never `snponly.efi`.** `snponly.efi` only drives the NIC it was loaded from; loaded from a CD or stick it has no network. The signed `ipxe.efi` drives NICs through the firmware's SNP/NII and has native drivers for only a few Realtek chips (plus USB host and `usbblk`). The shim is `EFI/BOOT/BOOTX64.EFI` and loads `ipxe.efi` from the same folder.
+- **No firmware network device → `EFI/BOOT/native/ipxe.efi`**, built from source with all native drivers, unsigned. The script `imgfetch`es `native/autoexec.ipxe` under the name `autoexec.ipxe` before `chain`ing it, so the chained iPXE finds its script in our virtual filesystem. Under Secure Boot the firmware refuses it; the script says so and exits 1.
+- **OVMF only connects the devices in QEMU's boot order.** A NIC without `bootindex` gets no SNP when booting from CD, and the media find no network. `vm.sh`'s `iso-*` modes give the NIC `bootindex=2`. `iso-uefi-native` uses a `pcnet` NIC without an option ROM: OVMF has an e1000 driver, so an e1000 doesn't exercise the fallback.
+- **El Torito EFI image under 32 MB, exact size.** El Torito stores the size in 512-byte sectors in 16 bits; xorriso writes 0 for a larger image, which EDK2 can't read. The ISO's FAT image is 8 MB.
+- **No ISO9660 on USB sticks.** With an El Torito catalog present, EDK2 treats a USB disk as a CD and hides its MBR partitions. The online ISO is therefore not isohybrid.
+- **The online ISO is cached** in `<data_dir>/usb-cache/online-<hash>.iso`, keyed on the rendered scripts (hence the boot URL) and the boot files' size and mtime. Older builds are deleted.
 
 **Relay cache**
 - **The relay stores every path in ASCII lower case** (`relay_cache.ascii_lower()` writes the manifest's `dest`). lighttpd runs with `force-lowercase-filenames` and Samba with `case sensitive = yes` + `default case = lower` + `preserve case = no`. Together these give the relay the same case-insensitive lookups as the hub's `resolve_ci()`, including for paths an admin typed after `{files_url}`. That's also why `CACHE_DIR` must be lower case. An image with two paths that are equal in lower case (`kernel` and `KERNEL`, or a file `a` beside a directory `A/`) can't be stored that way: `build_manifest()` sends it with an `error` and no files, the relay drops its copy and reports the error, and clients always use the hub for it.

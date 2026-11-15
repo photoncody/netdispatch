@@ -102,6 +102,10 @@ def boot(
         device.ip = request.client.host
     if safe_slug(relay):
         device.relay_id = safe_slug(relay)
+    elif relay == "-":
+        # Boot media on a subnet without a relay: forget the relay a previous
+        # PXE boot recorded, or its cache would be offered to this client.
+        device.relay_id = None
     if safe_slug(arch):
         device.arch = safe_slug(arch)[:32]
     if safe_slug(platform):

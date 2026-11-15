@@ -21,6 +21,7 @@ case-insensitively (lighttpd ``force-lowercase-filenames``, Samba
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -333,6 +334,44 @@ def relay_online(relay: Relay, settings: Settings) -> bool:
     if not relay.enabled or relay.last_seen is None:
         return False
     return (utcnow() - relay.last_seen).total_seconds() <= settings.relay_offline_seconds
+
+
+def _subnet(value: str | None) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    try:
+        return ipaddress.ip_network((value or "").strip(), strict=False)
+    except ValueError:
+        return None
+
+
+def relay_for_client(
+    db: Session, settings: Settings, relay_ip: str | None, client_ip: str | None
+) -> Relay | None:
+    """The enabled relay serving a boot-media client's subnet, or None.
+
+    ``relay_ip`` is the ProxyDHCP server that answered the client (iPXE's
+    ``${proxydhcp/dhcp-server}``): a relay's interface address, which its
+    heartbeat reports as ``ip_address``. Without one (the relay is down, or the
+    client is on another subnet) the client's own address is matched against
+    the relays' reported subnets, the most specific first. Online relays win.
+    """
+    relays = db.query(Relay).filter(Relay.enabled.is_(True)).all()
+    if relay_ip:
+        hits = [r for r in relays if r.ip_address == relay_ip]
+        if hits:
+            return max(hits, key=lambda r: relay_online(r, settings))
+    try:
+        addr = ipaddress.ip_address(client_ip or "")
+    except ValueError:
+        return None
+    best: tuple[tuple[bool, int], Relay] | None = None
+    for r in relays:
+        net = _subnet(r.subnet)
+        if net is None or net.version != addr.version or addr not in net or net.prefixlen == 0:
+            continue
+        rank = (relay_online(r, settings), net.prefixlen)
+        if best is None or rank > best[0]:
+            best = (rank, r)
+    return best[1] if best else None
 
 
 def usable_cache(

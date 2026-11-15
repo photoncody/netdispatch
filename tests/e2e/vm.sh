@@ -13,11 +13,17 @@
 #                       MAC 52:54:00:aa:00:04, diskless. Needs a relay with SECURE_BOOT=true.
 #   vm.sh win-sb [new]  like win, with Secure Boot as in uefi-sb
 #                       MAC 52:54:00:aa:00:05
+#   vm.sh iso-bios      boot the online-only boot ISO ($ND_ISO, default
+#   vm.sh iso-uefi      /var/tmp/netdispatch-online.iso) from a CD drive, as BMC
+#   vm.sh iso-uefi-sb   virtual media would. MACs 52:54:00:aa:00:06/07/08/09, diskless.
+#   vm.sh iso-uefi-native  like iso-uefi with a pcnet NIC: no driver in OVMF or the signed iPXE (no
+#                       option ROM), so the ISO must chain iPXE's own drivers.
+#                       Same taps as bios/uefi/uefi-sb/uefi: don't run them at once.
 #
 # Monitor socket: /tmp/nd-<mode>.mon (use screenshot.py / sendkeys.py)
 # Serial log:     /tmp/nd-<mode>.serial
 set -eu
-mode="${1:?usage: vm.sh bios|uefi|uefi-sb|win|win-sb [new]}"
+mode="${1:?usage: vm.sh bios|uefi|uefi-sb|win|win-sb [new]|iso-bios|iso-uefi|iso-uefi-sb|iso-uefi-native}"
 pidfile="/tmp/nd-$mode.pid"
 if [ -f "$pidfile" ]; then kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile"; sleep 1; fi
 
@@ -74,6 +80,31 @@ case "$mode" in
       -drive "file=$disk,if=none,id=d0,format=qcow2,cache=unsafe" \
       -device "nvme,drive=d0,serial=nd${mode%-sb}0,bootindex=2" \
       -device qemu-xhci -device usb-tablet $common
+    ;;
+  iso-*)
+    iso="${ND_ISO:-/var/tmp/netdispatch-online.iso}"
+    [ -f "$iso" ] || { echo "no boot ISO at $iso (download /api/usb/online.iso or set ND_ISO)"; exit 1; }
+    case "$mode" in
+      iso-bios) tap=ndtap0 mac=52:54:00:aa:00:06 ;;
+      iso-uefi) tap=ndtap1 mac=52:54:00:aa:00:07 ;;
+      iso-uefi-sb) tap=ndtap3 mac=52:54:00:aa:00:08 ;;
+      iso-uefi-native) tap=ndtap1 mac=52:54:00:aa:00:09 ;;
+      *) echo "unknown mode $mode"; exit 1 ;;
+    esac
+    # bootindex=2: OVMF only connects the devices in QEMU's boot order, and the
+    # signed iPXE drives the NIC through the firmware's driver.
+    nic="virtio-net-pci,netdev=n0,mac=$mac,bootindex=2"
+    [ "$mode" = iso-uefi-native ] && nic="pcnet,netdev=n0,mac=$mac,romfile=,bootindex=2"
+    fw=""
+    if [ "$mode" != iso-bios ]; then
+      cp -f "$vars_template" "/tmp/nd-$mode-vars.fd"
+      fw="-drive if=pflash,format=raw,readonly=on,file=$code -drive if=pflash,format=raw,file=/tmp/nd-$mode-vars.fd"
+    fi
+    # shellcheck disable=SC2086
+    qemu-system-x86_64 -name "nd-$mode" $kvm $machine -m 1536 -smp 2 $fw \
+      -netdev "tap,id=n0,ifname=$tap,script=no,downscript=no" -device "$nic" \
+      -drive "if=none,id=cd,media=cdrom,readonly=on,file=$iso" -device "ide-cd,drive=cd,bootindex=1" \
+      $common
     ;;
   *) echo "unknown mode $mode"; exit 1 ;;
 esac

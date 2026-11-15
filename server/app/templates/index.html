@@ -187,6 +187,45 @@
     </div>
   </section>
 
+  <!-- ========================================================= boot media -->
+  <section x-show="tab === 'media'" x-cloak>
+    <div class="mb-4">
+      <h2 class="text-xl font-semibold text-slate-100">Boot media</h2>
+      <p class="text-sm text-slate-400">For machines that can't PXE boot. Boot media bring a machine onto the network and into the same hold loop as a PXE client.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+        <div class="flex items-start gap-3">
+          <div class="min-w-0 flex-1">
+            <h3 class="font-semibold text-slate-100">Online-only boot ISO</h3>
+            <p class="mt-1 text-sm text-slate-400">For BMC virtual media (iDRAC, iLO, IP KVMs) and optical drives. Attach it as a virtual CD and boot from it.</p>
+          </div>
+          <span class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                :class="mediaInfo && mediaInfo.online_iso ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'"
+                x-text="!mediaInfo ? '…' : (mediaInfo.online_iso ? 'available' : 'unavailable')"></span>
+        </div>
+        <ul class="mt-4 list-disc space-y-1 pl-5 text-sm text-slate-300">
+          <li>Gets an address by DHCP. If a relay answers on the subnet, the machine is recorded under that relay and uses its cache; otherwise everything comes from the hub.</li>
+          <li>UEFI (Secure Boot on or off) and legacy BIOS.</li>
+          <li>Holds no images and no credentials. It does contain the hub's boot URL: <span class="font-mono text-slate-200" x-text="mediaInfo ? mediaInfo.boot_url : cfg.boot_url"></span>. Download it again if that URL changes.</li>
+          <li>Machines whose firmware has no network driver (network stack switched off in setup) only work with Secure Boot off.</li>
+        </ul>
+        <template x-if="mediaInfo && !mediaInfo.online_iso">
+          <div class="mt-4 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            <div class="font-semibold">The hub can't build the ISO:</div>
+            <template x-for="p in mediaInfo.problems" :key="p"><div class="font-mono" x-text="p"></div></template>
+          </div>
+        </template>
+        <div class="mt-5">
+          <a href="/api/usb/online.iso" download
+             class="inline-block rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+             :class="mediaInfo && !mediaInfo.online_iso ? 'pointer-events-none opacity-40' : ''">Download ISO</a>
+          <span class="ml-2 text-xs text-slate-500">about 10 MB · not for USB sticks</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============================================================= images -->
   <section x-show="tab === 'images'" x-cloak>
     <div class="mb-4 flex flex-wrap items-end gap-3">
@@ -605,7 +644,7 @@ function netdispatch() {
     cfg: window.ND_CONFIG,
     tab: 'devices',
     tabs: [],
-    devices: [], relays: [], isos: [], unattends: [], uaVars: {},
+    devices: [], relays: [], isos: [], unattends: [], uaVars: {}, mediaInfo: null,
     deviceFilter: '', statusFilter: '',
     lastRefresh: null, refreshError: false,
     uploads: [], toasts: [],
@@ -622,6 +661,7 @@ function netdispatch() {
         { id: 'relays', label: 'Relays', badge: () => this.relays.filter(r => r.enabled && !r.online).length || '' },
         { id: 'images', label: 'Images' },
         { id: 'unattend', label: 'Unattend' },
+        { id: 'media', label: 'Boot media' },
       ];
       const fromHash = location.hash.replace('#', '');
       if (this.tabs.some(t => t.id === fromHash)) this.tab = fromHash;
@@ -631,11 +671,16 @@ function netdispatch() {
       });
       this.refresh(true);
       this.loadUnattends();
+      if (this.tab === 'media') this.loadMedia();
       this.api('GET', '/api/unattend/variables').then(v => this.uaVars = v).catch(() => {});
       setInterval(() => this.refresh(false), 3000);
     },
 
-    setTab(id) { this.tab = id; location.hash = id; if (id === 'unattend') this.loadUnattends(); if (id === 'images') this.loadIsos(); },
+    setTab(id) { this.tab = id; location.hash = id; if (id === 'unattend') this.loadUnattends(); if (id === 'images') this.loadIsos(); if (id === 'media') this.loadMedia(); },
+
+    async loadMedia() {
+      try { this.mediaInfo = await this.api('GET', '/api/usb/info'); } catch (e) { this.toast(e.message, true); }
+    },
 
     async api(method, url, body) {
       const opts = { method, headers: { 'X-Requested-With': 'netdispatch' } };
