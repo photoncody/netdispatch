@@ -223,6 +223,124 @@
           <span class="ml-2 text-xs text-slate-500">about 10 MB · not for USB sticks</span>
         </div>
       </div>
+
+      <!-- USB Creator pairing -->
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+        <h3 class="font-semibold text-slate-100">USB Creator</h3>
+        <p class="mt-1 text-sm text-slate-400">The Windows app that writes USB sticks. It shows a pairing code when it first connects to this hub: approve it here.</p>
+        <p class="mt-1 text-xs text-slate-500">USB Creator ships in a later release. Until then, <span class="font-mono">tests/e2e/make-stick.py</span> pairs the same way and writes a stick from Linux.</p>
+        <form class="mt-4 flex flex-wrap items-end gap-2" @submit.prevent="approvePairing(pairForm.code, pairForm.name)">
+          <label class="text-xs uppercase tracking-wider text-slate-400">Code
+            <input x-model="pairForm.code" placeholder="ABCD-EFGH" maxlength="9" required
+                   class="mt-1 block w-32 rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 font-mono text-sm uppercase tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+          <label class="min-w-0 flex-1 text-xs uppercase tracking-wider text-slate-400">Name
+            <input x-model="pairForm.name" placeholder="e.g. Service desk PC" maxlength="128" required
+                   class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+          </label>
+          <button class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Approve</button>
+        </form>
+        <template x-if="usbCreators.pairings.length">
+          <div class="mt-4">
+            <div class="text-xs uppercase tracking-wider text-slate-500">Waiting for approval</div>
+            <template x-for="p in usbCreators.pairings" :key="p.code">
+              <div class="mt-2 flex items-center gap-3 rounded border border-slate-800 px-3 py-2 text-sm">
+                <span class="font-mono text-slate-100" x-text="p.code"></span>
+                <span class="min-w-0 flex-1 truncate text-slate-400" x-text="(p.client_name || 'USB Creator') + ' · ' + (p.client_ip || '?')"></span>
+                <span x-show="p.approved" class="text-xs text-emerald-300">approved</span>
+                <button x-show="!p.approved" type="button" @click="pairForm.code = p.code" class="text-xs text-emerald-300 hover:text-emerald-200">Use code</button>
+                <button type="button" @click="rejectPairing(p.code)" class="text-xs text-rose-300 hover:text-rose-200">Reject</button>
+              </div>
+            </template>
+          </div>
+        </template>
+        <div class="mt-4 text-xs uppercase tracking-wider text-slate-500">Paired</div>
+        <div x-show="!usbCreators.creators.length" class="mt-2 text-sm text-slate-500">None yet.</div>
+        <template x-for="c in usbCreators.creators" :key="c.id">
+          <div class="mt-2 flex items-center gap-3 rounded border border-slate-800 px-3 py-2 text-sm">
+            <span class="min-w-0 flex-1 truncate text-slate-200" x-text="c.name"></span>
+            <span class="text-xs text-slate-500" x-text="(c.sticks + ' stick' + (c.sticks === 1 ? '' : 's')) + ' · last seen ' + ago(c.last_seen)"></span>
+            <button type="button" @click="revokeCreator(c)" class="text-xs text-rose-300 hover:text-rose-200">Revoke</button>
+          </div>
+        </template>
+      </div>
+
+      <!-- Stick profiles -->
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-5 lg:col-span-2">
+        <div class="flex items-start gap-3">
+          <div class="min-w-0 flex-1">
+            <h3 class="font-semibold text-slate-100">USB stick profiles</h3>
+            <p class="mt-1 text-sm text-slate-400">What a stick carries for machines that can't reach the hub: Windows Setup and WinPE images, each with an answer file. Online, a stick boots like a PXE client and uses this site's relay; offline, or when you press L, it boots its own copies.</p>
+          </div>
+          <span class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                :class="mediaInfo && mediaInfo.sticks ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'"
+                x-text="!mediaInfo ? '…' : (mediaInfo.sticks ? 'available' : 'unavailable')"></span>
+          <button type="button" @click="openProfile(null)" class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">New profile</button>
+        </div>
+        <template x-if="mediaInfo && !mediaInfo.sticks">
+          <div class="mt-4 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            <div class="font-semibold">The hub can't make stick boot files:</div>
+            <template x-for="p in mediaInfo.stick_problems" :key="p"><div class="font-mono" x-text="p"></div></template>
+          </div>
+        </template>
+        <div class="mt-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          A stick holds its profile's answer files, including any passwords in them, and a key that can download the profile's images. Revoke a lost stick below.
+        </div>
+        <div x-show="!usbProfiles.length" class="mt-4 text-sm text-slate-500">No profiles yet.</div>
+        <template x-for="p in usbProfiles" :key="p.id">
+          <div class="mt-3 rounded border border-slate-800 px-4 py-3">
+            <div class="flex items-center gap-3">
+              <span class="font-semibold text-slate-100" x-text="p.name"></span>
+              <span class="text-xs text-slate-500" x-text="p.sticks + ' stick' + (p.sticks === 1 ? '' : 's')"></span>
+              <span class="flex-1"></span>
+              <button type="button" @click="openProfile(p)" class="text-xs text-emerald-300 hover:text-emerald-200">Edit</button>
+              <button type="button" @click="deleteProfile(p)" class="text-xs text-rose-300 hover:text-rose-200">Delete</button>
+            </div>
+            <div x-show="!p.entries.length" class="mt-1 text-xs text-slate-500">No local images: sticks of this profile are online-only.</div>
+            <template x-for="e in p.entries" :key="e.id">
+              <div class="mt-1 flex flex-wrap gap-x-3 text-xs">
+                <span class="text-slate-200" x-text="e.label"></span>
+                <span class="text-slate-500" x-text="e.iso_name + (e.unattend_name ? ' + ' + e.unattend_name : '')"></span>
+                <span class="text-slate-500" x-show="e.boot_bytes != null" x-text="fmtSize((e.boot_bytes || 0) + (e.data_bytes || 0))"></span>
+                <span class="text-rose-300" x-show="e.error" x-text="e.error"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Sticks -->
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-5 lg:col-span-2">
+        <h3 class="font-semibold text-slate-100">USB sticks</h3>
+        <p class="mt-1 text-sm text-slate-400">Made by USB Creator. Each image copy shows whether it matches the hub's current version.</p>
+        <div x-show="!usbSticks.length" class="mt-4 text-sm text-slate-500">No sticks yet.</div>
+        <template x-if="usbSticks.length">
+          <table class="mt-4 w-full text-left text-sm">
+            <thead class="text-xs uppercase tracking-wider text-slate-500">
+              <tr><th class="py-2 pr-3">Stick</th><th class="py-2 pr-3">Profile</th><th class="py-2 pr-3">Images</th><th class="py-2 pr-3">Last update</th><th class="py-2"></th></tr>
+            </thead>
+            <tbody>
+              <template x-for="s in usbSticks" :key="s.id">
+                <tr class="border-t border-slate-800 align-top">
+                  <td class="py-2 pr-3"><div class="text-slate-100" x-text="s.name"></div><div class="font-mono text-[11px] text-slate-500" x-text="s.id + (s.creator_name ? ' · ' + s.creator_name : '')"></div></td>
+                  <td class="py-2 pr-3 text-slate-300" x-text="s.profile_name || '—'"></td>
+                  <td class="py-2 pr-3">
+                    <span x-show="!s.items.length" class="text-xs text-slate-500">online only</span>
+                    <template x-for="it in s.items" :key="it.iso_id">
+                      <div class="flex items-center gap-2 text-xs">
+                        <span class="rounded-full px-2 py-0.5 font-medium" :class="stickStateClass(it.state)" x-text="it.state"></span>
+                        <span class="text-slate-300" x-text="it.iso_name"></span>
+                      </div>
+                    </template>
+                  </td>
+                  <td class="py-2 pr-3 text-xs text-slate-400" x-text="ago(s.last_report_at)"></td>
+                  <td class="py-2 text-right"><button type="button" @click="revokeStick(s)" class="text-xs text-rose-300 hover:text-rose-200">Revoke</button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </template>
+      </div>
     </div>
   </section>
 
@@ -352,6 +470,50 @@
     netdispatch <span x-text="cfg.version"></span> · boot URL <span class="font-mono" x-text="cfg.boot_url"></span> · <a href="/docs" class="hover:text-slate-400">API docs</a>
   </footer>
 </main>
+
+<!-- ================================================== stick profile modal -->
+<div x-show="profileModal.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16" @keydown.escape.window="profileModal.open = false">
+  <div class="w-full max-w-3xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" @click.outside="profileModal.open = false">
+    <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+      <h3 class="font-semibold text-slate-100" x-text="profileModal.id ? 'Edit stick profile' : 'New stick profile'"></h3>
+      <button type="button" @click="profileModal.open = false" class="text-slate-400 hover:text-slate-100">✕</button>
+    </div>
+    <form class="space-y-4 px-5 py-4" @submit.prevent="saveProfile()">
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Name
+        <input x-model="profileModal.name" maxlength="128" required
+               class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+      </label>
+      <label class="block text-xs uppercase tracking-wider text-slate-400">Description
+        <input x-model="profileModal.description" maxlength="2000"
+               class="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-slate-100 focus:border-emerald-500 focus:outline-none">
+      </label>
+      <div>
+        <div class="text-xs uppercase tracking-wider text-slate-400">Images on the stick</div>
+        <p class="mt-1 text-[11px] text-slate-500">Windows Setup and WinPE images, booted on UEFI machines from the stick's menu. Offline, Windows Setup asks for the computer name; the answer file's other variables (MAC, IP, relay) are empty.</p>
+        <template x-for="(e, n) in profileModal.entries" :key="n">
+          <div class="mt-2 grid grid-cols-12 gap-2">
+            <input x-model="e.label" placeholder="Menu label" maxlength="128" required
+                   class="col-span-4 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none">
+            <select x-model.number="e.iso_id" required class="col-span-4 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none">
+              <option value="">Image…</option>
+              <template x-for="i in stickIsos()" :key="i.id"><option :value="i.id" x-text="i.name" :selected="i.id === e.iso_id"></option></template>
+            </select>
+            <select x-model="e.unattend_id" :disabled="!isWindowsSetup(e.iso_id)" class="col-span-3 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:opacity-40">
+              <option value="">No answer file</option>
+              <template x-for="u in unattends" :key="u.id"><option :value="String(u.id)" x-text="u.name" :selected="String(u.id) === e.unattend_id"></option></template>
+            </select>
+            <button type="button" @click="profileModal.entries.splice(n, 1)" class="col-span-1 text-sm text-rose-300 hover:text-rose-200">✕</button>
+          </div>
+        </template>
+        <button type="button" @click="profileModal.entries.push({ label: '', iso_id: '', unattend_id: '' })" class="mt-2 text-sm text-emerald-300 hover:text-emerald-200">+ Add image</button>
+      </div>
+      <div class="flex justify-end gap-2 border-t border-slate-800 pt-4">
+        <button type="button" @click="profileModal.open = false" class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">Cancel</button>
+        <button class="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <!-- ======================================================== dispatch modal -->
 <div x-show="dispatch.open" x-cloak class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16" @keydown.escape.window="dispatch.open = false">
@@ -645,6 +807,9 @@ function netdispatch() {
     tab: 'devices',
     tabs: [],
     devices: [], relays: [], isos: [], unattends: [], uaVars: {}, mediaInfo: null,
+    usbProfiles: [], usbCreators: { pairings: [], creators: [] }, usbSticks: [],
+    pairForm: { code: '', name: '' },
+    profileModal: { open: false, id: null, name: '', description: '', entries: [] },
     deviceFilter: '', statusFilter: '',
     lastRefresh: null, refreshError: false,
     uploads: [], toasts: [],
@@ -679,7 +844,68 @@ function netdispatch() {
     setTab(id) { this.tab = id; location.hash = id; if (id === 'unattend') this.loadUnattends(); if (id === 'images') this.loadIsos(); if (id === 'media') this.loadMedia(); },
 
     async loadMedia() {
-      try { this.mediaInfo = await this.api('GET', '/api/usb/info'); } catch (e) { this.toast(e.message, true); }
+      try {
+        this.mediaInfo = await this.api('GET', '/api/usb/info');
+        this.usbProfiles = await this.api('GET', '/api/usb/profiles');
+        await this.loadUsbLive();
+        if (!this.isos.length) await this.loadIsos();
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async loadUsbLive() {
+      const [creators, sticks] = await Promise.all([this.api('GET', '/api/usb/creators'), this.api('GET', '/api/usb/sticks')]);
+      this.usbCreators = creators; this.usbSticks = sticks;
+    },
+    stickIsos() { return this.isos.filter(i => i.boot_method === 'windows_setup' || i.boot_method === 'winpe'); },
+    isWindowsSetup(isoId) { const i = this.isos.find(x => x.id === isoId); return !!i && i.boot_method === 'windows_setup'; },
+    stickStateClass(state) {
+      return { current: 'bg-emerald-500/15 text-emerald-300', outdated: 'bg-amber-500/15 text-amber-300',
+               syncing: 'bg-sky-500/15 text-sky-300', error: 'bg-rose-500/15 text-rose-300' }[state] || 'bg-slate-700/40 text-slate-400';
+    },
+    openProfile(p) {
+      this.profileModal = p
+        ? { open: true, id: p.id, name: p.name, description: p.description || '',
+            entries: p.entries.map(e => ({ label: e.label, iso_id: e.iso_id, unattend_id: e.unattend_id == null ? '' : String(e.unattend_id) })) }
+        : { open: true, id: null, name: '', description: '', entries: [] };
+    },
+    async saveProfile() {
+      const m = this.profileModal;
+      const body = { name: m.name, description: m.description || null,
+        entries: m.entries.map(e => ({ label: e.label, iso_id: Number(e.iso_id),
+          unattend_id: e.unattend_id && this.isWindowsSetup(Number(e.iso_id)) ? Number(e.unattend_id) : null })) };
+      try {
+        if (m.id) await this.api('PUT', `/api/usb/profiles/${m.id}`, body);
+        else await this.api('POST', '/api/usb/profiles', body);
+        this.profileModal.open = false;
+        this.toast('Profile saved. Sticks pick it up at their next update.');
+        this.usbProfiles = await this.api('GET', '/api/usb/profiles');
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async deleteProfile(p) {
+      if (!confirm(`Delete profile ${p.name}? Its sticks keep working online but get no images.`)) return;
+      try { await this.api('DELETE', `/api/usb/profiles/${p.id}`); this.usbProfiles = await this.api('GET', '/api/usb/profiles'); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async approvePairing(code, name) {
+      try {
+        await this.api('POST', `/api/usb/pairings/${encodeURIComponent(code.trim())}/approve`, { name });
+        this.pairForm = { code: '', name: '' };
+        this.toast('Approved. USB Creator finishes pairing within a few seconds.');
+        await this.loadUsbLive();
+      } catch (e) { this.toast(e.message, true); }
+    },
+    async rejectPairing(code) {
+      try { await this.api('DELETE', `/api/usb/pairings/${encodeURIComponent(code)}`); await this.loadUsbLive(); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async revokeCreator(c) {
+      if (!confirm(`Revoke USB Creator ${c.name}? It can no longer make sticks. Sticks it made keep working.`)) return;
+      try { await this.api('DELETE', `/api/usb/creators/${c.id}`); await this.loadUsbLive(); }
+      catch (e) { this.toast(e.message, true); }
+    },
+    async revokeStick(s) {
+      if (!confirm(`Revoke stick ${s.name}? It can no longer download images or updates. It still boots online.`)) return;
+      try { await this.api('DELETE', `/api/usb/sticks/${s.id}`); await this.loadUsbLive(); }
+      catch (e) { this.toast(e.message, true); }
     },
 
     async api(method, url, body) {
@@ -713,6 +939,7 @@ function netdispatch() {
           if (d) this.dispatch.device = d;
         }
         if (this.cacheModal.open) await this.loadCache();
+        if (this.tab === 'media') await this.loadUsbLive();
         this.lastRefresh = new Date(); this.refreshError = false;
       } catch (e) { this.refreshError = true; }
     },

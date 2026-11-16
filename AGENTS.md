@@ -42,6 +42,8 @@ Boot chain:
 | `server/app/usb_scripts.py` | iPXE text for boot media: the media script (stands in for the relay's `netdispatch.ipxe`) and `/usb/boot`'s hand-off to `/boot` |
 | `server/app/usb_media.py` | builds and caches the online-only boot ISO (xorriso + mtools, no root) |
 | `server/app/routers/usb.py` | `/usb/boot` (unauthenticated: picks the client's relay), `/api/usb/info`, `/api/usb/online.iso` |
+| `server/app/usb_sticks.py` | USB sticks: pairing and keys, per-stick manifests (`StickManifests`), the layout of hub-rendered files, offline unattend parts, the FAT32 boot template (`BootTemplate`) |
+| `server/app/routers/usb_sticks.py` | admin: `/api/usb/profiles`, `/api/usb/creators`, `/api/usb/pairings`, `/api/usb/sticks`; USB Creator and stick writers: `/api/usb/app/*` (`X-Creator-Key` / `X-Stick-Key`) |
 | `server/app/unattend.py` | template files in `data/configs`, sandboxed Jinja rendering (CRLF kept), XML validation, `computer_name()` for `{{ hostname }}` |
 | `server/app/unattend_generator.py` | runs `netdispatch-unattendgen`, escapes its XML for Jinja, swaps `__ND_*__` placeholders for template variables, `NEW_TEMPLATE_SETTINGS` |
 | `server/app/templates/unattend/` | the generator form: `_generator.html`, one `_sec_*.html` per section, `_macros.html` for the controls |
@@ -54,7 +56,7 @@ Boot chain:
 | `relay/cache-sync.sh` | `RELAY_CACHE=true`: manifest sync (resumable curl, rate limit, sync window), deletes unassigned files, writes `smb.conf`, supervises lighttpd + smbd |
 | `relay/ipxe/embed.ipxe`, `relay/ipxe/general.h` | compiled into the iPXE binaries. `embed.ipxe` is also shipped as `secureboot/autoexec.ipxe`. |
 | `relay/Dockerfile` | `ipxe` stage (compile), `ipxe-signed` stage (download signed shim + iPXE, SHA-pinned), runtime |
-| `tests/e2e/` | QEMU end-to-end harness (isolated bridge, fake router DHCP, BIOS/UEFI/Windows VMs) |
+| `tests/e2e/` | QEMU end-to-end harness (isolated bridge, fake router DHCP, BIOS/UEFI/Windows VMs); `make-stick.py` writes a USB stick image through the stick API, like USB Creator |
 | `examples/unattend/` | tested sample templates |
 
 ## Build and test
@@ -76,7 +78,7 @@ The server Dockerfile's stages:
 - `assets`: Tailwind CLI, Alpine.js and wimboot, each SHA-pinned.
 - `unattendgen-base` / `unattendgen`: the .NET SDK (pinned by digest) fetches the upstream library and publishes `netdispatch-unattendgen` as one self-contained file for the target architecture. It cross-compiles on the build platform, so arm64 needs no emulation.
 - `unattendgen-test`: runs the generator's .NET tests. CI builds it; the runtime image does not depend on it.
-- `ipxe-signed` (the signed shim + `ipxe.efi`, same pins as `relay/Dockerfile`: keep them in step) and `ipxe-media` (`ipxe.lkrn` and `ipxe-native.efi` from source) supply the boot media's files in `/opt/netdispatch/usb/`, beside ISOLINUX from Debian.
+- `ipxe-signed` (the signed shim, `ipxe.efi` and `snponly.efi`, same pins as `relay/Dockerfile`: keep them in step) and `ipxe-media` (`ipxe.lkrn` and `ipxe-native.efi` from source) supply the boot media's files in `/opt/netdispatch/usb/`, beside ISOLINUX and SYSLINUX's `mbr.bin` from Debian. The `syslinux` package's installer (mtools build) makes the stick boot template.
 - `test` and `runtime`. `runtime` is the last stage and therefore the default target.
 
 The generator's .NET tests on their own: `docker build --target unattendgen-test server/`. On a machine with the .NET 10 SDK: `server/unattendgen/fetch-upstream.sh && dotnet test --solution server/unattendgen/Unattendgen.slnx`. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
@@ -156,6 +158,13 @@ Verified with this harness:
   - all four reach the hold loop, recorded under the relay that answered by ProxyDHCP;
   - local boot: UEFI exits 1 and the firmware moves on to its next entry; BIOS runs `sanboot` on drive 0x80;
   - `iso-uefi-native` (no firmware driver for the NIC) chains the native-driver iPXE; the same machine with Secure Boot enforced is refused and shows the explanation.
+- USB sticks (`make-stick.py` image, `vm.sh usb-uefi`, `usb-uefi-sb`, `usb-bios`, `usb-win`):
+  - online, all three reach the hold loop under the relay that answered; the hold loop offers L on UEFI;
+  - L in the hold loop: the child exits 1 and the parent shows the stick's menu; *Boot from local disk* exits 1 to the firmware's next entry; the hub's local boot exits 0 from the child and 1 from the parent;
+  - BIOS local boot reaches a marker disk on drive 0x81;
+  - after a network attempt, OVMF has lost the stick: choosing its image shows the "restart and press L" message;
+  - `usb-win` (no hub reachable): L at the first prompt, the Windows entry, the name prompt (default `ND-AA000D` from the MAC; `bad name` and `12345` refused), Setup from the stick's exFAT partition, the reboots back through the stick's menu to the disk, and the desktop with `hostname` = the typed name. About 40 minutes, most of it Setup reading from QEMU's emulated USB stick;
+  - `make-stick.py` downloaded the image from the relay cache.
 - With a caching relay (`RELAY_CACHE=true`):
   - the sync of Windows 11 and Debian netinst, with every cached file byte-identical to the hub's;
   - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
@@ -179,7 +188,8 @@ Verified with this harness:
 2. **Local boot = exit with a failure status, end to end.**
    - UEFI firmware only tries the next boot entry when a boot option *fails*. A successful return drops EDK2 into its setup menu. The original bug was exactly this: it worked on SeaBIOS and broke on OVMF.
    - The mechanism: `render_local()` does `set nd-local 1` and `exit 0`. The relay's `netdispatch.ipxe` and `embed.ipxe` both check `isset ${nd-local}` and `exit 1`. Any other return means "hub unreachable", so they retry.
-   - **This logic spans three files** (`pxe_engine.py`, `relay/entrypoint.sh` heredoc, `relay/ipxe/embed.ipxe`), plus the boot-media script in `usb_scripts.py`. Change them together.
+   - **This logic spans three files** (`pxe_engine.py`, `relay/entrypoint.sh` heredoc, `relay/ipxe/embed.ipxe`), plus the boot-media scripts in `usb_scripts.py`. Change them together.
+   - A USB stick adds one level: its network script runs in a child iPXE, which exits **0** for a local boot and 1 to go back to the stick; the stick's own iPXE then exits 1 to the firmware (`render_stick_parent`).
    - Boot media follow the same rule on UEFI (`exit 1`). The BIOS media script was loaded by ISOLINUX as a kernel and has nothing to return to, so it runs `sanboot --no-describe --drive 0x80` instead.
    - The Secure Boot path uses the same `embed.ipxe` (as `autoexec.ipxe`). Its `exit 1` makes the signed iPXE fail, the shim passes the failure on, and the firmware tries the next entry. This was verified on OVMF with Secure Boot enforced.
 3. **The wait loop uses `chain --replace --autofree`.**
@@ -240,6 +250,19 @@ Verified with this harness:
 - **El Torito EFI image under 32 MB, exact size.** El Torito stores the size in 512-byte sectors in 16 bits; xorriso writes 0 for a larger image, which EDK2 can't read. The ISO's FAT image is 8 MB.
 - **No ISO9660 on USB sticks.** With an El Torito catalog present, EDK2 treats a USB disk as a CD and hides its MBR partitions. The online ISO is therefore not isohybrid.
 - **The online ISO is cached** in `<data_dir>/usb-cache/online-<hash>.iso`, keyed on the rendered scripts (hence the boot URL) and the boot files' size and mtime. Older builds are deleted.
+
+**USB sticks**
+- **Two iPXE instances, because the network iPXE takes the stick away.** The signed full `ipxe.efi` drives the USB controllers itself (xHCI, `usbblk`) once it starts, so its `file:` reads fail (0x7f4de08e). Reading the stick through iPXE's own USB driver (`sanhook usb:<pci>-<port>-1.0`) worked only sometimes in QEMU, after minutes of SCSI timeouts. So the stick's `EFI/BOOT/ipxe.efi` is the signed **`snponly.efi`** (the parent): it drives nothing, reads the stick through the firmware, and has no network. For the network it chains the full `ipxe.efi` (the child) through the `shim` command. `autoexec.ipxe` is loaded before iPXE connects its drivers, which is why it can be read at all.
+- **The firmware may lose the stick once the child has run.** On exit the child reconnects the firmware's drivers, and in QEMU/OVMF exactly one read from the stick works before it disappears for good; reconnecting again (another iPXE's exit) doesn't bring it back. So the parent loads everything the network needs (child, its script, the native fallback, the shim) into memory first: *Use the network* never needs the stick. A stick image chosen after a network attempt may fail to load: the script says to restart and press L, which reaches the menu without touching the network. Not seen on real hardware yet.
+- **The child reads the parent's memory.** A chained iPXE's `file:/` is its parent's virtual filesystem: the parent `imgfetch`es `net.ipxe` as `autoexec.ipxe` (the name iPXE looks for at start-up), and the child finds `native.ipxe`/`native.efi` there.
+- **`shim` only registers the shim when it's needed:** with an image selected that the firmware can load directly (Secure Boot off), `shim <image>` unregisters instead. The parent runs `shim` with no argument after the child returns, before booting wimboot.
+- **`imgfree` before booting a stick image.** wimboot injects every image iPXE holds into WinPE, including the child and native iPXE the parent keeps in memory.
+- **Offline computer name.** iPXE can't write files and can't validate input, so `netdispatch.cmd` asks for the name in WinPE (`set /p`), validates it there (strip every allowed character; anything left is invalid), and joins the answer file's parts around it with `copy /b`. The parts are the template rendered with `{{ hostname }}` as a marker (`usb_sticks.offline_unattend_parts`); a filter on `hostname` hides the marker, and the name is then not used.
+- **The default name comes from `ipconfig /all`** ("Physical Address", English WinPE only), else `ND-<random>`.
+- **Boot template.** The hub builds the FAT32 boot partition (mkfs.fat with the partition offset as hidden sectors, mtools, `syslinux --install`) and sends only its head up to the last used cluster (`fat_used_bytes`), gzipped; a writer writes it at the partition start and leaves the rest of the partition as it is. SYSLINUX writes its boot code to the boot sector only, so the template copies it over the FAT32 backup boot sector. Cached per size and offset in `<data_dir>/usb-cache`, keyed on the boot files (`boot_files_version`).
+- **BIOS stick local boot is drive 0x81**: the stick itself is 0x80 (`sanboot --drive 0x81`), unlike the online ISO's 0x80.
+- **Stick keys** (`nds_…`) open one stick's manifest, layout and report; creator keys (`ndc_…`) open every stick's. Pairing hands out the creator key once, to the poll token's holder, after an admin approved the code. `/api/usb/app/` is an exempt prefix in `auth.py`.
+- **A stick's manifest never contains the SMB password**: offline Windows Setup reads its files from the stick. Its `cache_url` is the relay cache of the *caller's* subnet (`relay_for_client` on the request address) when that relay holds a current copy.
 
 **Relay cache**
 - **The relay stores every path in ASCII lower case** (`relay_cache.ascii_lower()` writes the manifest's `dest`). lighttpd runs with `force-lowercase-filenames` and Samba with `case sensitive = yes` + `default case = lower` + `preserve case = no`. Together these give the relay the same case-insensitive lookups as the hub's `resolve_ci()`, including for paths an admin typed after `{files_url}`. That's also why `CACHE_DIR` must be lower case. An image with two paths that are equal in lower case (`kernel` and `KERNEL`, or a file `a` beside a directory `A/`) can't be stored that way: `build_manifest()` sends it with an `error` and no files, the relay drops its copy and reports the error, and clients always use the hub for it.

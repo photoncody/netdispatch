@@ -23,10 +23,11 @@ from .config import Settings
 from .database import init_db, make_engine, make_sessionmaker
 from .iso_tools import ExtractionManager, recover_on_startup
 from .relay_cache import ManifestCache
-from .routers import boot, devices, files, isos, relays, ui, unattend, usb
+from .routers import boot, devices, files, isos, relays, ui, unattend, usb, usb_sticks
 from .unattend import sync_from_disk
 from .unattend_generator import UnattendGenerator
 from .usb_media import OnlineIso
+from .usb_sticks import BootTemplate, StickManifests
 
 APP_DIR = Path(__file__).resolve().parent
 log = logging.getLogger("netdispatch")
@@ -72,6 +73,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.extractor = extractor
     app.state.manifests = ManifestCache()
     app.state.online_iso = OnlineIso()
+    app.state.stick_images = StickManifests()
+    app.state.boot_template = BootTemplate()
     app.state.unattend_generator = UnattendGenerator(settings.unattendgen_path, settings.unattendgen_timeout)
     app.state.templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
     # Cache-buster for /static assets: changes whenever the image is rebuilt.
@@ -96,7 +99,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(APP_DIR / "static"), check_dir=False), name="static")
     for r in (
         auth_router, ui.router, boot.router, files.router, devices.router,
-        relays.router, isos.router, unattend.router, usb.router,
+        relays.router, isos.router, unattend.router, usb.router, usb_sticks.router,
     ):
         app.include_router(r)
     return app

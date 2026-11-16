@@ -19,11 +19,18 @@
 #   vm.sh iso-uefi-native  like iso-uefi with a pcnet NIC: no driver in OVMF or the signed iPXE (no
 #                       option ROM), so the ISO must chain iPXE's own drivers.
 #                       Same taps as bios/uefi/uefi-sb/uefi: don't run them at once.
+#   vm.sh usb-uefi      boot a USB stick image ($ND_STICK, default /var/tmp/nd-stick.img,
+#   vm.sh usb-uefi-sb   made with make-stick.py) from xHCI, NIC on the test LAN, diskless.
+#   vm.sh usb-bios      MACs 52:54:00:aa:00:0a/0b/0c. Same taps as uefi/uefi-sb/bios.
+#   vm.sh usb-win [new]     offline install target: the stick first, then an NVMe disk
+#   vm.sh usb-win-sb [new]  (64G qcow2 in /var/tmp); e1000e on QEMU's user-mode network
+#                       with restrict=on: DHCP works, the hub is unreachable.
+#                       MACs 52:54:00:aa:00:0d/0e. "new" wipes disk + NVRAM.
 #
 # Monitor socket: /tmp/nd-<mode>.mon (use screenshot.py / sendkeys.py)
 # Serial log:     /tmp/nd-<mode>.serial
 set -eu
-mode="${1:?usage: vm.sh bios|uefi|uefi-sb|win|win-sb [new]|iso-bios|iso-uefi|iso-uefi-sb|iso-uefi-native}"
+mode="${1:?usage: vm.sh bios|uefi|uefi-sb|win|win-sb [new]|iso-bios|iso-uefi|iso-uefi-sb|iso-uefi-native|usb-uefi|usb-uefi-sb|usb-bios|usb-win|usb-win-sb [new]}"
 pidfile="/tmp/nd-$mode.pid"
 if [ -f "$pidfile" ]; then kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile"; sleep 1; fi
 
@@ -105,6 +112,47 @@ case "$mode" in
       -netdev "tap,id=n0,ifname=$tap,script=no,downscript=no" -device "$nic" \
       -drive "if=none,id=cd,media=cdrom,readonly=on,file=$iso" -device "ide-cd,drive=cd,bootindex=1" \
       $common
+    ;;
+  usb-*)
+    stick="${ND_STICK:-/var/tmp/nd-stick.img}"
+    [ -f "$stick" ] || { echo "no stick image at $stick (make one with make-stick.py or set ND_STICK)"; exit 1; }
+    usb="-device qemu-xhci,id=xhci -drive if=none,id=stick,format=raw,cache=unsafe,file=$stick -device usb-storage,bus=xhci.0,drive=stick,bootindex=1"
+    case "$mode" in
+      usb-win|usb-win-sb)
+        [ -n "$kvm" ] || { echo "$mode needs KVM (/dev/kvm)"; exit 1; }
+        if [ "$mode" = usb-win ]; then mac=52:54:00:aa:00:0d; else mac=52:54:00:aa:00:0e; fi
+        disk="/var/tmp/nd-$mode.qcow2" vars="/var/tmp/nd-$mode-vars.fd"
+        if [ "${2:-}" = "new" ]; then rm -f "$disk" "$vars"; fi
+        [ -f "$disk" ] || qemu-img create -q -f qcow2 "$disk" 64G
+        [ -f "$vars" ] || cp "$vars_template" "$vars"
+        # shellcheck disable=SC2086
+        qemu-system-x86_64 -name "nd-$mode" $kvm $machine -smp 4 -m 6144 \
+          -drive "if=pflash,format=raw,readonly=on,file=$code" \
+          -drive "if=pflash,format=raw,file=$vars" \
+          -netdev "user,id=n0,restrict=on" -device "e1000e,netdev=n0,mac=$mac" \
+          -drive "file=$disk,if=none,id=d0,format=qcow2,cache=unsafe" \
+          -device "nvme,drive=d0,serial=nd${mode%-sb}0,bootindex=2" \
+          $usb -device usb-tablet $common
+        ;;
+      *)
+        case "$mode" in
+          usb-uefi) tap=ndtap1 mac=52:54:00:aa:00:0a ;;
+          usb-uefi-sb) tap=ndtap3 mac=52:54:00:aa:00:0b ;;
+          usb-bios) tap=ndtap0 mac=52:54:00:aa:00:0c ;;
+          *) echo "unknown mode $mode"; exit 1 ;;
+        esac
+        fw=""
+        if [ "$mode" != usb-bios ]; then
+          cp -f "$vars_template" "/tmp/nd-$mode-vars.fd"
+          fw="-drive if=pflash,format=raw,readonly=on,file=$code -drive if=pflash,format=raw,file=/tmp/nd-$mode-vars.fd"
+        fi
+        # shellcheck disable=SC2086
+        qemu-system-x86_64 -name "nd-$mode" $kvm $machine -m 1536 -smp 2 $fw \
+          -netdev "tap,id=n0,ifname=$tap,script=no,downscript=no" \
+          -device "virtio-net-pci,netdev=n0,mac=$mac,bootindex=2" \
+          $usb $common
+        ;;
+    esac
     ;;
   *) echo "unknown mode $mode"; exit 1 ;;
 esac

@@ -82,6 +82,8 @@ class BootContext:
     fetch_base_url: str = ""
     # http://relay:port of a relay cache holding the image; empty = the hub.
     cache_base_url: str = ""
+    # A USB stick with images of its own: the hold loop offers L to go back to them.
+    usb_menu: bool = False
 
     @property
     def fetch_url(self) -> str:
@@ -97,6 +99,8 @@ class BootContext:
             f"{self.base_url}/boot?mac=${{netX/mac:hexhyp}}&ip=${{netX/ip}}"
             f"&relay={safe_slug(self.relay_id)}&arch=${{buildarch}}&platform=${{platform}}"
         )
+        if self.usb_menu:
+            url += "&usbmenu=1"
         if seq is not None:
             url += f"&seq={seq}"
         if result:
@@ -196,9 +200,22 @@ def render_wait(ctx: BootContext, seq: int = 0) -> str:
         f"echo   ${{nd-g}}poll {seq} :: waiting {_duration(waited)} :: next check in {int(ctx.poll_seconds)}s${{nd-r}}",
         "echo",
     ]
+    if ctx.usb_menu:
+        # A USB stick's network script (usb_scripts.render_media_script) sees
+        # nd-menu when this returns, and goes back to the stick's own images.
+        lines += [
+            "echo   ${nd-b}Press L${nd-r} for the images on this USB stick",
+            "echo",
+            ":poll",
+            f"prompt --key l --timeout {int(ctx.poll_seconds) * 1000} && goto usbmenu || goto next",
+            ":usbmenu",
+            "set nd-menu 1",
+            "exit 0",
+            ":next",
+        ]
+    else:
+        lines += [":poll", f"sleep {int(ctx.poll_seconds)}"]
     lines += [
-        ":poll",
-        f"sleep {int(ctx.poll_seconds)}",
         f"chain --replace --autofree {ctx.poll_url(seq=next_seq)} || goto unreachable",
         ":unreachable",
         "echo",
