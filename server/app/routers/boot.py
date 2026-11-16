@@ -72,6 +72,7 @@ def boot(
     platform: str = "",
     seq: int = 0,
     result: str = "",
+    usbmenu: str = "",
     db: Session = Depends(get_db),
 ):
     settings: Settings = request.app.state.settings
@@ -113,6 +114,7 @@ def boot(
 
     relay_obj = db.get(Relay, device.relay_id) if device.relay_id else None
     ctx = context_for(device, relay_obj, settings)
+    ctx.usb_menu = usbmenu == "1"
 
     if result == "failed" and device.state == STATE_BOOTING:
         device.state = STATE_WAITING

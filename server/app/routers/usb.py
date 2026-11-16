@@ -4,6 +4,7 @@ admin download of the online-only boot ISO."""
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -14,10 +15,12 @@ from ..database import get_db
 from ..pxe_engine import normalize_mac
 from ..relay_cache import relay_for_client
 from ..usb_media import MediaError, missing_requirements
+from ..usb_sticks import template_bios, template_missing
 from ..usb_scripts import check_hub_url, render_media_handoff
 from .boot import _clean_ip, ipxe_response
 
 log = logging.getLogger("netdispatch.usb")
+_STICK_ID = re.compile(r"^[a-z0-9]{6,32}$")
 router = APIRouter()
 
 
@@ -28,6 +31,9 @@ def usb_boot(
     ip: str = "",
     relay_ip: str = "",
     media: str = "",
+    stick: str = "",
+    have: str = "",
+    platform: str = "",
     db: Session = Depends(get_db),
 ):
     """First stop of a media script: pick the relay serving the client's subnet
@@ -36,15 +42,21 @@ def usb_boot(
     settings: Settings = request.app.state.settings
     client_ip = _clean_ip(ip) or (request.client.host if request.client else None)
     relay = relay_for_client(db, settings, _clean_ip(relay_ip), client_ip)
+    stick_id = stick if _STICK_ID.match(stick) else ""
+    # The hold loop offers L to go back to the stick's own images (UEFI only).
+    usb_menu = bool(stick_id) and platform == "efi" and have not in ("", "-")
     log.info(
-        "boot media (%s) %s at %s: relay %s",
+        "boot media (%s%s) %s at %s: relay %s",
         (media or "?")[:16],
+        f" {stick_id}" if stick_id else "",
         normalize_mac(mac) or "?",
         client_ip or "?",
         relay.id if relay else "none",
     )
     return ipxe_response(
-        render_media_handoff(settings.boot_url, relay.id if relay else None, relay.name if relay else None)
+        render_media_handoff(
+            settings.boot_url, relay.id if relay else None, relay.name if relay else None, usb_menu=usb_menu
+        )
     )
 
 
@@ -56,7 +68,19 @@ def usb_info(request: Request):
         check_hub_url(settings.boot_url)
     except ValueError as e:
         problems.append(str(e))
-    return {"boot_url": settings.boot_url, "online_iso": not problems, "problems": problems}
+    stick_problems = template_missing(settings)
+    try:
+        check_hub_url(settings.boot_url)
+    except ValueError as e:
+        stick_problems.append(str(e))
+    return {
+        "boot_url": settings.boot_url,
+        "online_iso": not problems,
+        "problems": problems,
+        "sticks": not stick_problems,
+        "stick_problems": stick_problems,
+        "stick_bios": template_bios(settings),
+    }
 
 
 @router.get("/api/usb/online.iso")

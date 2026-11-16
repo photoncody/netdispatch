@@ -232,3 +232,53 @@ def unattend_out(
     if content is not None:
         out["content"] = content
     return out
+
+
+# ---------------------------------------------------------------- USB sticks
+
+
+class UsbEntryIn(BaseModel):
+    iso_id: int
+    unattend_id: int | None = None
+    label: str = Field(min_length=1, max_length=128)
+
+
+class UsbProfileIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    entries: list[UsbEntryIn] = Field(default_factory=list, max_length=50)
+
+
+class UsbApproveIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class UsbPairStartIn(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+
+
+class UsbPairPollIn(BaseModel):
+    poll_token: str = Field(min_length=16, max_length=200)
+
+
+class UsbStickCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    profile_id: int
+
+
+class UsbLayoutIn(BaseModel):
+    # iso id -> etag of the copy the stick holds
+    have: dict[str, str] = Field(default_factory=dict, max_length=100)
+
+
+class UsbStickItemIn(BaseModel):
+    iso_id: int
+    etag: str | None = Field(default=None, max_length=64)
+    status: str = Field(max_length=16)
+    bytes_done: int = 0
+    bytes_total: int = 0
+    message: str | None = Field(default=None, max_length=255)
+
+
+class UsbReportIn(BaseModel):
+    items: list[UsbStickItemIn] = Field(default_factory=list, max_length=100)

@@ -189,6 +189,110 @@ class UnattendGenerated(Base):
         return value if isinstance(value, dict) else {}
 
 
+# USB stick image statuses (reported by the writer: USB Creator or the updater)
+STICK_ITEM_SYNCING = "syncing"
+STICK_ITEM_READY = "ready"
+STICK_ITEM_ERROR = "error"
+STICK_ITEM_STATUSES = {STICK_ITEM_SYNCING, STICK_ITEM_READY, STICK_ITEM_ERROR}
+
+
+class UsbProfile(Base):
+    """What a USB stick carries: images (with an unattend each) to keep local
+    copies of, for machines that can't reach the hub.
+
+    The USB tables are all new tables: there are no migrations. Rows are
+    deleted explicitly with their parents (see ``usb_sticks.delete_*``).
+    """
+
+    __tablename__ = "usb_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class UsbProfileEntry(Base):
+    """One local image on a profile's sticks, as it appears in the stick's menu."""
+
+    __tablename__ = "usb_profile_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("usb_profiles.id", ondelete="CASCADE"), index=True)
+    iso_id: Mapped[int] = mapped_column(ForeignKey("isos.id", ondelete="CASCADE"))
+    unattend_id: Mapped[int | None] = mapped_column(
+        ForeignKey("unattend_configs.id", ondelete="SET NULL"), nullable=True
+    )
+    label: Mapped[str] = mapped_column(String(128))
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UsbCreator(Base):
+    """A paired USB Creator install, allowed to make sticks."""
+
+    __tablename__ = "usb_creators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    key_hash: Mapped[str] = mapped_column(String(128))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class UsbPairing(Base):
+    """A pending pairing: USB Creator shows ``code``, an admin approves it, and
+    the app collects its key with the ``poll`` token it alone holds."""
+
+    __tablename__ = "usb_pairings"
+
+    code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    poll_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    client_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    # Set on approval; the key is generated when the app polls.
+    creator_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class UsbStick(Base):
+    __tablename__ = "usb_sticks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usb_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    creator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usb_creators.id", ondelete="SET NULL"), nullable=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(128))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_report_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class UsbStickItem(Base):
+    """An image copy on a stick, as its writer last reported it."""
+
+    __tablename__ = "usb_stick_items"
+
+    stick_id: Mapped[str] = mapped_column(ForeignKey("usb_sticks.id", ondelete="CASCADE"), primary_key=True)
+    iso_id: Mapped[int] = mapped_column(ForeignKey("isos.id", ondelete="CASCADE"), primary_key=True)
+    etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=STICK_ITEM_SYNCING)
+    bytes_done: Mapped[int] = mapped_column(BigInteger, default=0)
+    bytes_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Device(Base):
     __tablename__ = "devices"
 

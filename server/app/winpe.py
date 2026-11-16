@@ -25,6 +25,23 @@ DIAG_EVERY = 10
 RELAY_TRIES = 3
 
 
+# The first lines of every netdispatch.cmd. cmd.exe re-reads a batch file from
+# disk before every line. Read back from the wimboot-injected copy in
+# X:\Windows\System32, the script goes wrong a few seconds into WinPE: a line
+# comes back cut short, then the file ends early. It shows up when a
+# long-running command such as wpeinit, net use or ping returns. The script then
+# ends, and winpeshl, whose only app it is, reboots WinPE, so a share that was
+# down never got past the first retries. Run from a copy on the RAM disk
+# instead. The copy is made while the first lines still read back correctly, and
+# a batch file started without CALL replaces this one for good. If the copy
+# fails, carry on from here.
+_RUN_FROM_COPY = [
+    f'if /i not "%~f0"=="{RUN_COPY}" (',
+    f'  copy /y "%~f0" {RUN_COPY} >nul && {RUN_COPY}',
+    ")",
+]
+
+
 def _batch_literal(value: str) -> str:
     """Escape a value for use inside double quotes in a .cmd script."""
     if '"' in value or "\r" in value or "\n" in value:
@@ -76,18 +93,7 @@ def render_netdispatch_cmd(
     unattend = "X:\\Windows\\System32\\autounattend.xml"
     lines = [
         "@echo off",
-        # cmd.exe re-reads a batch file from disk before every line. Read back from
-        # the wimboot-injected copy in X:\Windows\System32, this script goes wrong a
-        # few seconds into WinPE: a line comes back cut short, then the file ends
-        # early. It shows up when a long-running command such as wpeinit, net use or
-        # ping returns. The script then ends, and winpeshl, whose only app it is,
-        # reboots WinPE, so a share that was down never got past the first retries.
-        # Run from a copy on the RAM disk instead. The copy is made while the first
-        # lines still read back correctly, and a batch file started without CALL
-        # replaces this one for good. If the copy fails, carry on from here.
-        f'if /i not "%~f0"=="{RUN_COPY}" (',
-        f'  copy /y "%~f0" {RUN_COPY} >nul && {RUN_COPY}',
-        ")",
+        *_RUN_FROM_COPY,
         "title netdispatch - Windows Setup",
         "echo.",
         f"echo netdispatch: preparing Windows Setup for {mac}",
@@ -170,6 +176,114 @@ def render_netdispatch_cmd(
         "cmd /k",
         "goto :eof",
         *_diagnostics(host),
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
+# Drive letters WinPE may give the stick's data partition (X: is WinPE itself).
+_DRIVES = "C D E F G H I J K L M N O P Q R S T U V W Y Z"
+# Characters of a computer name (unattend.computer_name).
+_NAME_CHARS = "A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 -"
+
+
+def render_stick_cmd(iso: IsoImage, entry_id: int, unattend_parts: int) -> str:
+    """``netdispatch.cmd`` for Windows Setup from a USB stick, without a network.
+
+    It finds the stick's data partition (NDDATA) by ``netdispatch\\stick.json``.
+    With an answer file that uses ``{{ hostname }}`` it asks for the computer
+    name - default ND-<last 6 MAC hex digits> as on the network, or ND-<random>
+    without an adapter - and joins the answer file's parts around it
+    (``usb_sticks.offline_unattend_parts``). Then it runs Setup from the stick.
+    """
+    setup = (iso.setup_path or "setup.exe").replace("/", "\\").lstrip("\\")
+    img = f"netdispatch\\img\\{iso.id}"
+    parts_dir = f"netdispatch\\unattend\\{entry_id}"
+    unattend = "X:\\autounattend.xml"
+    lines = [
+        "@echo off",
+        *_RUN_FROM_COPY,
+        "setlocal EnableExtensions EnableDelayedExpansion",
+        "title netdispatch - Windows Setup from a USB stick",
+        "echo.",
+        "echo netdispatch: preparing Windows Setup from this USB stick",
+        "wpeinit",
+        "set ND_TRIES=0",
+        ":find",
+        'set "ND_DATA="',
+        f'for %%d in ({_DRIVES}) do if exist "%%d:\\netdispatch\\stick.json" if exist "%%d:\\{img}\\{setup}" set "ND_DATA=%%d:"',
+        "if defined ND_DATA goto found",
+        "set /a ND_TRIES+=1",
+        "if !ND_TRIES! GEQ 20 goto notfound",
+        "echo netdispatch: waiting for the stick's data partition (attempt !ND_TRIES!)",
+        "ping -n 3 127.0.0.1 >nul",
+        "goto find",
+        ":notfound",
+        f"echo netdispatch: no drive holds {img}\\{setup}. The stick may be incomplete:",
+        "echo netdispatch: update it with USB Creator. Type EXIT to look again.",
+        "cmd /k",
+        "set ND_TRIES=0",
+        "goto find",
+        ":found",
+        "echo netdispatch: image files on !ND_DATA!",
+    ]
+    if unattend_parts > 1:
+        lines += [
+            # Default name: ND-<last 6 hex digits of the first adapter's MAC>.
+            # English ipconfig only; otherwise (or with no adapter) ND-<random>.
+            'set "ND_DEF="',
+            'for /f "tokens=2 delims=:" %%m in (\'ipconfig /all ^| find "Physical Address"\') do if not defined ND_DEF set "ND_DEF=%%m"',
+            'if defined ND_DEF set "ND_DEF=!ND_DEF: =!"',
+            'if defined ND_DEF set "ND_DEF=!ND_DEF:-=!"',
+            'if defined ND_DEF if "!ND_DEF:~11,1!"=="" set "ND_DEF="',
+            'if defined ND_DEF if not "!ND_DEF:~12!"=="" set "ND_DEF="',
+            'if defined ND_DEF (set "ND_DEF=ND-!ND_DEF:~-6!") else set "ND_DEF=ND-!RANDOM!"',
+            ":name",
+            "echo.",
+            'set "ND_NAME="',
+            'set /p "ND_NAME=netdispatch: computer name for this PC [!ND_DEF!]: "',
+            'if not defined ND_NAME set "ND_NAME=!ND_DEF!"',
+            'if not "!ND_NAME:~15!"=="" goto badname',
+            # Strip every allowed character: anything left is not allowed.
+            'set "ND_REST=!ND_NAME!"',
+            f'for %%c in ({_NAME_CHARS}) do if defined ND_REST set "ND_REST=!ND_REST:%%c=!"',
+            "if defined ND_REST goto badname",
+            # Only digits: nothing left once the digits are gone.
+            'set "ND_REST=!ND_NAME!"',
+            'for %%c in (0 1 2 3 4 5 6 7 8 9) do if defined ND_REST set "ND_REST=!ND_REST:%%c=!"',
+            "if not defined ND_REST goto badname",
+            "goto nameok",
+            ":badname",
+            "echo netdispatch: use 1 to 15 letters, digits and hyphens, not only digits.",
+            "goto name",
+            ":nameok",
+            "echo netdispatch: computer name !ND_NAME!",
+            # No newline after the name: it goes into the middle of the XML.
+            '<nul set /p "=!ND_NAME!" > X:\\nd-name.txt',
+        ]
+    if unattend_parts:
+        sources = [f'"!ND_DATA!\\{parts_dir}\\part{n}.xml"' for n in range(unattend_parts)]
+        joined = "+X:\\nd-name.txt+".join(sources)
+        lines += [
+            f"copy /y /b {joined} {unattend} >nul",
+            "if errorlevel 1 (",
+            "  echo netdispatch: could not assemble the answer file from the stick - opening a command prompt",
+            "  cmd /k",
+            ")",
+            # As in a network deployment: scripts inside the answer file may look
+            # for it themselves (see render_netdispatch_cmd).
+            f"reg add HKLM\\System\\Setup /v UnattendFile /t REG_SZ /d {unattend} /f >nul",
+            f"echo netdispatch: starting Windows Setup with {unattend}",
+            f'"!ND_DATA!\\{img}\\{setup}" /unattend:{unattend}',
+        ]
+    else:
+        lines += [
+            "echo netdispatch: starting Windows Setup (interactive, no answer file)",
+            f'"!ND_DATA!\\{img}\\{setup}"',
+        ]
+    lines += [
+        "echo netdispatch: Setup exited - opening a command prompt",
+        "cmd /k",
         "",
     ]
     return "\r\n".join(lines)

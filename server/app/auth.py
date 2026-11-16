@@ -21,7 +21,8 @@ from .config import Settings
 log = logging.getLogger("netdispatch.auth")
 
 # Paths reachable without a browser session. Boot clients and relays never
-# hold a session; relays authenticate with X-Relay-Key instead.
+# hold a session; relays authenticate with X-Relay-Key instead, and USB
+# Creator and stick updaters (/api/usb/app/) with X-Creator-Key / X-Stick-Key.
 EXEMPT_EXACT = {
     "/health",
     "/boot",
@@ -32,7 +33,7 @@ EXEMPT_EXACT = {
     "/api/relays/heartbeat",
     "/api/relays/cache/manifest",
 }
-EXEMPT_PREFIXES = ("/files/", "/static/", "/auth/")
+EXEMPT_PREFIXES = ("/files/", "/static/", "/auth/", "/api/usb/app/")
 
 CSRF_HEADER = "x-requested-with"
 CSRF_VALUE = "netdispatch"

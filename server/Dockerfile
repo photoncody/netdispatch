@@ -82,9 +82,10 @@ COPY unattendgen/tests ./tests
 RUN dotnet test --solution Unattendgen.slnx --no-restore -c Release
 
 # ---------------------------------------------------------------- boot media: signed iPXE
-# Boot media (the online-only ISO; USB sticks later) start UEFI machines through
-# the iPXE project's shim, signed by Microsoft, which loads the iPXE-signed
-# ipxe.efi. Same releases and SHA-256 pins as relay/Dockerfile's ipxe-signed
+# Boot media start UEFI machines through the iPXE project's shim, signed by
+# Microsoft, which loads the iPXE-signed ipxe.efi (the online ISO, and a stick's
+# network child) or snponly.efi (a stick's parent, which reads the stick). Same
+# releases and SHA-256 pins as relay/Dockerfile's ipxe-signed
 # stage: keep both in step.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS ipxe-signed
 ARG IPXE_SIGNED_VERSION=2.0.0
@@ -98,7 +99,7 @@ RUN set -eu; \
       "https://github.com/ipxe/ipxe/releases/download/v${IPXE_SIGNED_VERSION}/ipxeboot.tar.gz"; \
     echo "${IPXE_SIGNED_SHA256}  ipxeboot.tar.gz" | sha256sum -c -; \
     tar -xzf ipxeboot.tar.gz; \
-    cp ipxeboot/x86_64-sb/ipxe.efi /out/; \
+    cp ipxeboot/x86_64-sb/ipxe.efi ipxeboot/x86_64-sb/snponly.efi /out/; \
     curl -fsSL -o /out/shimx64.efi \
       "https://github.com/ipxe/shim/releases/download/ipxe-${IPXE_SHIM_VERSION}/ipxe-shimx64.efi"; \
     echo "${IPXE_SHIM_SHA256}  /out/shimx64.efi" | sha256sum -c -; \
@@ -138,11 +139,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data
 RUN apt-get update \
  && apt-get install -y --no-install-recommends 7zip syslinux-common isolinux xorriso mtools dosfstools \
+ && if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+      apt-get install -y --no-install-recommends syslinux; \
+    fi \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /opt/netdispatch \
  && cp /usr/lib/syslinux/memdisk /opt/netdispatch/memdisk \
  && mkdir -p /opt/netdispatch/usb \
- && cp /usr/lib/ISOLINUX/isolinux.bin /usr/lib/syslinux/modules/bios/ldlinux.c32 /opt/netdispatch/usb/ \
+ && cp /usr/lib/ISOLINUX/isolinux.bin /usr/lib/syslinux/modules/bios/ldlinux.c32 /usr/lib/syslinux/mbr/mbr.bin \
+      /opt/netdispatch/usb/ \
  && (command -v 7zz || command -v 7z) \
  && groupadd --system --gid 1000 netdispatch \
  && useradd --system --uid 1000 --gid 1000 --home-dir /data --shell /usr/sbin/nologin netdispatch

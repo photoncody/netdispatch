@@ -551,7 +551,26 @@ Some machines can't network-boot: PXE is switched off or locked in the firmware,
 - With Secure Boot on, the machine's firmware must provide the network driver: if its network stack is switched off in the firmware setup, switch it on. With Secure Boot off, the ISO falls back to iPXE's own network drivers.
 - The ISO is meant for CD and virtual-CD use. Don't write it to a USB stick: firmware treats such a stick as a CD.
 
-USB sticks with their own copies of images, for machines with no network at all, are coming in a later release.
+### USB sticks with their own images
+
+A netdispatch USB stick boots a machine like the online ISO does, and also carries copies of Windows images, for machines that can't reach the hub.
+
+1. **Boot media → USB stick profiles → New profile.** Add the Windows Setup or WinPE images the stick should carry, each with a menu label and, for Windows Setup, an answer file.
+2. **Write the stick with USB Creator**, a Windows app that pairs with the hub: approve the code it shows under **Boot media → USB Creator**. It partitions the stick and copies the images from the hub, or from this site's relay when the relay has them cached. USB Creator ships in a later release; until then, `tests/e2e/make-stick.py` writes a stick (or a disk image) from Linux through the same API.
+3. **Boot a machine from the stick** (UEFI or legacy BIOS):
+   - **Online:** after a 3-second prompt it goes onto the network, detects the site's relay and waits in the hold loop like a PXE client. Deploy it from **Devices** as usual; images come from the hub or the relay, not from the stick.
+   - **Press L** at that first prompt, or in the hold loop, for the stick's own menu: its images, *Boot from local disk*, *Use the network*. The menu boots the local disk after 15 seconds, so a stick left in after Windows Setup reboots never starts another install.
+   - **Offline** (no network adapter, no DHCP, hub unreachable), the stick comes back to the same menu.
+   - **Windows Setup from the stick** asks for the computer name (default `ND-` + the last 6 hex digits of the MAC address, as on the network) and puts it where the answer file uses `{{ hostname }}`. The answer file's other variables (MAC, IP, relay) are empty offline. Setup runs from the stick; no network is needed.
+
+The stick has two partitions: `NDDATA` (exFAT, the whole Windows trees: no 4 GB file limit) and `NDBOOT` (FAT32, the boot files and what the firmware loads). Explorer shows `NDDATA`.
+
+Limitations:
+
+- Images on the stick are **UEFI only** and limited to **Windows Setup and WinPE** images. Legacy BIOS machines boot sticks online only, and only sticks from a hub on x86-64: on arm64 the hub can't install SYSLINUX, so its sticks are UEFI-only.
+- **Some firmware loses the stick** once the network part of the stick has run: if a stick image fails to load after the network was tried, restart the machine and press **L** at the first prompt. Network deployments are unaffected.
+- With Secure Boot on, the firmware must provide the network driver, as for the online ISO.
+- The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*. Updating a stick in place comes with USB Creator.
 
 ## Operations: upgrades, backups, logs
 
@@ -631,6 +650,7 @@ After changing a setting, apply it with `docker compose up -d`.
 - A caching relay serves its images on its segment without sign-in (HTTP), and through a share that uses the hub's `SMB_USERNAME`/`SMB_PASSWORD`. That is the same exposure as the hub's own `/files/iso/…` and install share. The relay gets the share password from the hub with its relay key.
 - Relay keys are stored hashed and shown only once.
 - The online-only boot ISO contains no secrets: only the hub's boot URL. Downloading it needs a dashboard session.
+- **USB sticks hold their profile's answer files**, including any passwords in them, and a key that can download the profile's images. Revoke a lost stick under **Boot media → USB sticks**. USB Creator installs pair with the hub by a code an admin approves, and can be revoked there too.
 - The dashboard is protected against cross-site request forgery.
 
 ## Limitations

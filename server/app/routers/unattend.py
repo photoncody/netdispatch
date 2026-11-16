@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from jinja2 import TemplateError
 from sqlalchemy.orm import Session
 
+from .. import usb_sticks
 from ..config import Settings
 from ..database import get_db
 from ..models import Device, UnattendConfig, UnattendGenerated, utcnow
@@ -320,6 +321,7 @@ def delete_template(cfg_id: int, request: Request, db: Session = Depends(get_db)
     for device in db.query(Device).filter(Device.unattend_id == cfg.id).all():
         device.unattend_id = None
     db.query(UnattendGenerated).filter(UnattendGenerated.unattend_id == cfg.id).delete()
+    usb_sticks.delete_for_unattend(db, cfg.id)
     template_path(settings, cfg).unlink(missing_ok=True)
     db.delete(cfg)
     db.commit()
