@@ -81,6 +81,54 @@ COPY unattendgen/src ./src
 COPY unattendgen/tests ./tests
 RUN dotnet test --solution Unattendgen.slnx --no-restore -c Release
 
+# ---------------------------------------------------------------- boot media: signed iPXE
+# Boot media (the online-only ISO; USB sticks later) start UEFI machines through
+# the iPXE project's shim, signed by Microsoft, which loads the iPXE-signed
+# ipxe.efi. Same releases and SHA-256 pins as relay/Dockerfile's ipxe-signed
+# stage: keep both in step.
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS ipxe-signed
+ARG IPXE_SIGNED_VERSION=2.0.0
+ARG IPXE_SIGNED_SHA256=01a526d4cc791fc30362259c609d6c506cc64a7bdff51b9a5eb788354e17eee1
+ARG IPXE_SHIM_VERSION=16.1
+ARG IPXE_SHIM_SHA256=5eecca2780bd49c900565e124516a1bd666ec5e012825f34991b6ba1ef2fa6cf
+RUN set -eu; \
+    apk add --no-cache curl; \
+    mkdir -p /out /tmp/sb; cd /tmp/sb; \
+    curl -fsSL -o ipxeboot.tar.gz \
+      "https://github.com/ipxe/ipxe/releases/download/v${IPXE_SIGNED_VERSION}/ipxeboot.tar.gz"; \
+    echo "${IPXE_SIGNED_SHA256}  ipxeboot.tar.gz" | sha256sum -c -; \
+    tar -xzf ipxeboot.tar.gz; \
+    cp ipxeboot/x86_64-sb/ipxe.efi /out/; \
+    curl -fsSL -o /out/shimx64.efi \
+      "https://github.com/ipxe/shim/releases/download/ipxe-${IPXE_SHIM_VERSION}/ipxe-shimx64.efi"; \
+    echo "${IPXE_SHIM_SHA256}  /out/shimx64.efi" | sha256sum -c -; \
+    rm -rf /tmp/sb; \
+    ls -l /out
+
+# ---------------------------------------------------------------- boot media: iPXE from source
+# Built from the same tag as the relay's iPXE (x86 code: cross-compiled on non-x86
+# build hosts, as in relay/Dockerfile):
+#   ipxe.lkrn        legacy BIOS iPXE that ISOLINUX loads (the signed release has none)
+#   ipxe-native.efi  UEFI iPXE with all of iPXE's own NIC drivers, unsigned. The
+#                    signed ipxe.efi only has a few Realtek drivers and otherwise
+#                    relies on the firmware's; media chain this one when the firmware
+#                    offers no network device, which only works with Secure Boot off.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS ipxe-media
+ARG IPXE_REF=v2.0.0
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates git make perl liblzma-dev \
+      gcc binutils libc6-dev \
+ && if [ "$(uname -m)" != "x86_64" ]; then \
+      apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu libc6-dev-amd64-cross; \
+    fi \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "${IPXE_REF}" https://github.com/ipxe/ipxe.git /ipxe
+WORKDIR /ipxe/src
+RUN set -eu; \
+    cross=""; [ "$(uname -m)" = "x86_64" ] || cross="CROSS=x86_64-linux-gnu-"; \
+    make -j"$(nproc)" NO_WERROR=1 $cross bin/ipxe.lkrn bin-x86_64-efi/ipxe.efi; \
+    mkdir -p /out; cp bin/ipxe.lkrn /out/; cp bin-x86_64-efi/ipxe.efi /out/ipxe-native.efi; ls -l /out
+
 # ---------------------------------------------------------------- base
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -89,10 +137,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DATA_DIR=/data
 RUN apt-get update \
- && apt-get install -y --no-install-recommends 7zip syslinux-common \
+ && apt-get install -y --no-install-recommends 7zip syslinux-common isolinux xorriso mtools dosfstools \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /opt/netdispatch \
  && cp /usr/lib/syslinux/memdisk /opt/netdispatch/memdisk \
+ && mkdir -p /opt/netdispatch/usb \
+ && cp /usr/lib/ISOLINUX/isolinux.bin /usr/lib/syslinux/modules/bios/ldlinux.c32 /opt/netdispatch/usb/ \
  && (command -v 7zz || command -v 7z) \
  && groupadd --system --gid 1000 netdispatch \
  && useradd --system --uid 1000 --gid 1000 --home-dir /data --shell /usr/sbin/nologin netdispatch
@@ -102,6 +152,8 @@ RUN pip install -r requirements.txt
 COPY app ./app
 COPY --from=assets /out/app.css /out/alpine.min.js ./app/static/
 COPY --from=assets /out/wimboot /opt/netdispatch/wimboot
+COPY --from=ipxe-signed /out/ /opt/netdispatch/usb/
+COPY --from=ipxe-media /out/ /opt/netdispatch/usb/
 COPY --from=unattendgen /out/netdispatch-unattendgen /opt/netdispatch/netdispatch-unattendgen
 COPY unattendgen/THIRD-PARTY-NOTICES.md /opt/netdispatch/licenses/unattendgen-THIRD-PARTY-NOTICES.md
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -109,8 +161,10 @@ RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 # ---------------------------------------------------------------- test
 FROM base AS test
-# Tests that need the real unattend generator fail instead of skipping when it is missing.
-ENV NETDISPATCH_REQUIRE_UNATTENDGEN=1
+# Tests that need the real unattend generator or the boot media tools fail instead of
+# skipping when they are missing.
+ENV NETDISPATCH_REQUIRE_UNATTENDGEN=1 \
+    NETDISPATCH_REQUIRE_USB_TOOLS=1
 COPY requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
 COPY tests ./tests

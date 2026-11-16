@@ -40,11 +40,12 @@ netdispatch has two parts:
 7. [Add images](#add-images)
 8. [Windows installs and unattend templates](#windows-installs-and-unattend-templates)
 9. [Deploy a machine](#deploy-a-machine)
-10. [Operations: upgrades, backups, logs](#operations-upgrades-backups-logs)
-11. [Troubleshooting](#troubleshooting)
-12. [Configuration reference](#configuration-reference)
-13. [Security notes](#security-notes)
-14. [Limitations](#limitations)
+10. [Machines that can't PXE boot: boot media](#machines-that-cant-pxe-boot-boot-media)
+11. [Operations: upgrades, backups, logs](#operations-upgrades-backups-logs)
+12. [Troubleshooting](#troubleshooting)
+13. [Configuration reference](#configuration-reference)
+14. [Security notes](#security-notes)
+15. [Limitations](#limitations)
 
 ---
 
@@ -535,6 +536,23 @@ Other actions in the same dialog:
 - **Let unknown machines boot normally:** by default every unknown machine that network-boots waits on the hold screen. Set `NEW_DEVICE_STATE=local` so they boot their own disk until you stage them.
 - **Network boot first works well:** with network boot first in the boot order, machines boot their own disk every time unless you dispatch something.
 
+## Machines that can't PXE boot: boot media
+
+Some machines can't network-boot: PXE is switched off or locked in the firmware, the network card has no PXE support, or there is no relay on their subnet. Boot them from **boot media** instead. The media get the machine onto the network and into the same hold loop as a PXE client, so you deploy it from **Devices** as usual.
+
+### Online-only boot ISO (iDRAC, iLO, IP KVMs)
+
+**Boot media → Download ISO** gives you `netdispatch-online.iso`, about 10 MB. Attach it as virtual media in the server's BMC (or burn it), and boot the machine from it.
+
+- It gets an address by DHCP. If a netdispatch relay answers on that subnet, the machine is recorded under that relay and uses the relay's cache, as if it had PXE-booted through it. Otherwise everything comes from the hub.
+- It works with UEFI (Secure Boot on or off) and legacy BIOS.
+- It holds no images and no credentials, only the hub's boot URL (`BOOT_BASE_URL`, or `PUBLIC_URL`). Download it again after changing that URL.
+- **Local boot:** when the hub says "boot from local disk", a UEFI machine moves on to its next boot entry, so put the virtual CD first and the disk second. A BIOS machine boots its first hard disk.
+- With Secure Boot on, the machine's firmware must provide the network driver: if its network stack is switched off in the firmware setup, switch it on. With Secure Boot off, the ISO falls back to iPXE's own network drivers.
+- The ISO is meant for CD and virtual-CD use. Don't write it to a USB stick: firmware treats such a stick as a CD.
+
+USB sticks with their own copies of images, for machines with no network at all, are coming in a later release.
+
 ## Operations: upgrades, backups, logs
 
 **Upgrade the hub**
@@ -612,6 +630,7 @@ After changing a setting, apply it with `docker compose up -d`.
 - The Windows install share is read-only and requires a password. Guest access is refused.
 - A caching relay serves its images on its segment without sign-in (HTTP), and through a share that uses the hub's `SMB_USERNAME`/`SMB_PASSWORD`. That is the same exposure as the hub's own `/files/iso/…` and install share. The relay gets the share password from the hub with its relay key.
 - Relay keys are stored hashed and shown only once.
+- The online-only boot ISO contains no secrets: only the hub's boot URL. Downloading it needs a dashboard session.
 - The dashboard is protected against cross-site request forgery.
 
 ## Limitations

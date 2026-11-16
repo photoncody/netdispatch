@@ -25,6 +25,7 @@ log = logging.getLogger("netdispatch.auth")
 EXEMPT_EXACT = {
     "/health",
     "/boot",
+    "/usb/boot",
     "/login",
     "/logout",
     "/favicon.ico",

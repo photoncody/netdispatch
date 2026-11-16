@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     # is previewed or saved in the generator, never while a device boots.
     unattendgen_path: Path = Path("/opt/netdispatch/netdispatch-unattendgen")
     unattendgen_timeout: float = 30.0
+    # Boot files for boot media (signed shim + iPXE, ipxe.lkrn, ISOLINUX).
+    usb_assets_dir: Path = Path("/opt/netdispatch/usb")
 
     @field_validator("public_url", "boot_base_url", "linux_fetch_url")
     @classmethod
@@ -136,6 +138,11 @@ class Settings(BaseSettings):
     @property
     def configs_dir(self) -> Path:
         return self.data_dir / "configs"
+
+    @property
+    def usb_cache_dir(self) -> Path:
+        """Built boot media (the online ISO), rebuilt whenever their inputs change."""
+        return self.data_dir / "usb-cache"
 
     @property
     def effective_database_url(self) -> str:
