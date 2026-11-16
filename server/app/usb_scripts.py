@@ -68,7 +68,8 @@ STICK_DHCP_TRIES = 2
 
 _URL = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~\-/]*)?$")
 _STICK_ID = re.compile(r"^[a-z0-9]{6,32}$")
-_HAVE = re.compile(r"^[0-9a-f:,]{0,512}$")
+# "<iso id>:<8 hex>," per image; a profile holds at most 50 (schemas.UsbProfileIn).
+_HAVE = re.compile(r"^[0-9a-f:,]{0,2048}$")
 
 
 def check_hub_url(url: str) -> str:

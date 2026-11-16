@@ -567,7 +567,7 @@ The stick has two partitions: `NDDATA` (exFAT, the whole Windows trees: no 4 GB 
 
 Limitations:
 
-- Images on the stick are **UEFI only** and limited to **Windows Setup and WinPE** images. Legacy BIOS machines boot sticks online only.
+- Images on the stick are **UEFI only** and limited to **Windows Setup and WinPE** images. Legacy BIOS machines boot sticks online only, and only sticks from a hub on x86-64: on arm64 the hub can't install SYSLINUX, so its sticks are UEFI-only.
 - **Some firmware loses the stick** once the network part of the stick has run: if a stick image fails to load after the network was tried, restart the machine and press **L** at the first prompt. Network deployments are unaffected.
 - With Secure Boot on, the firmware must provide the network driver, as for the online ISO.
 - The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*. Updating a stick in place comes with USB Creator.

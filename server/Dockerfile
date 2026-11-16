@@ -138,7 +138,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DATA_DIR=/data
 RUN apt-get update \
- && apt-get install -y --no-install-recommends 7zip syslinux syslinux-common isolinux xorriso mtools dosfstools \
+ && apt-get install -y --no-install-recommends 7zip syslinux-common isolinux xorriso mtools dosfstools \
+ && if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+      apt-get install -y --no-install-recommends syslinux; \
+    fi \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /opt/netdispatch \
  && cp /usr/lib/syslinux/memdisk /opt/netdispatch/memdisk \

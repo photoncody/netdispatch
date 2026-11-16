@@ -15,7 +15,7 @@ from ..database import get_db
 from ..pxe_engine import normalize_mac
 from ..relay_cache import relay_for_client
 from ..usb_media import MediaError, missing_requirements
-from ..usb_sticks import template_missing
+from ..usb_sticks import template_bios, template_missing
 from ..usb_scripts import check_hub_url, render_media_handoff
 from .boot import _clean_ip, ipxe_response
 
@@ -79,6 +79,7 @@ def usb_info(request: Request):
         "problems": problems,
         "sticks": not stick_problems,
         "stick_problems": stick_problems,
+        "stick_bios": template_bios(settings),
     }
 
 

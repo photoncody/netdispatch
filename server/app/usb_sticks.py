@@ -185,8 +185,9 @@ def _stick_file(part: str, dest: str, rel: str, path: Path, iso_id: int) -> dict
         "part": part,
         "dest": dest,
         "src": f"/files/iso/{iso_id}/tree/{quote(rel, safe='/')}",
-        # Path below a caching relay's URL (relay_cache.build_manifest's dest).
-        "cache": f"tree/{iso_id}/{ascii_lower(rel)}",
+        # URL path below a caching relay's URL (relay_cache.build_manifest's
+        # dest), encoded like src.
+        "cache": quote(f"tree/{iso_id}/{ascii_lower(rel)}", safe="/"),
         "size": st.st_size,
         "mtime": int(st.st_mtime),
     }
@@ -471,7 +472,10 @@ TEMPLATE_FILES = {
     "syslinux/ipxe.lkrn": "ipxe.lkrn",  # legacy BIOS
 }
 MBR_ASSET = "mbr.bin"
-TEMPLATE_TOOLS = ("mkfs.fat", "mmd", "mcopy", "syslinux")
+TEMPLATE_TOOLS = ("mkfs.fat", "mmd", "mcopy")
+# SYSLINUX's installer makes sticks boot on legacy BIOS. Debian only builds it
+# for x86, so a hub on arm64 makes UEFI-only sticks.
+BIOS_TOOL = "syslinux"
 TEMPLATE_MIN_MB = 64
 TEMPLATE_MAX_MB = 64 * 1024
 
@@ -484,6 +488,11 @@ def template_missing(settings: Settings) -> list[str]:
     if not settings.wimboot_path.is_file():
         missing.append(str(settings.wimboot_path))
     return missing
+
+
+def template_bios(settings: Settings) -> bool:
+    """Whether this hub's stick boot partitions boot on legacy BIOS too."""
+    return shutil.which(BIOS_TOOL) is not None
 
 
 def _asset_stamp(path: Path) -> list[int]:
@@ -499,7 +508,10 @@ def boot_files_version(settings: Settings) -> str:
         stamps["wimboot"] = _asset_stamp(settings.wimboot_path)
     except OSError:
         return ""
-    blob = json.dumps({"files": stamps, "cfg": render_stick_syslinux_cfg(), "v": __version__}, sort_keys=True)
+    blob = json.dumps(
+        {"files": stamps, "cfg": render_stick_syslinux_cfg(), "bios": template_bios(settings), "v": __version__},
+        sort_keys=True,
+    )
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -563,7 +575,13 @@ class BootTemplate:
                             break
                         dst.write(chunk)
                         remaining -= len(chunk)
-                meta = {"version": version, "size_mb": size_mb, "offset": offset, "head_bytes": head}
+                meta = {
+                    "version": version,
+                    "size_mb": size_mb,
+                    "offset": offset,
+                    "head_bytes": head,
+                    "bios": template_bios(settings),
+                }
                 os.replace(part, out)
                 meta_path.write_text(json.dumps(meta))
             # Keep the current version only (any size): sticks of every size share it.
@@ -594,9 +612,10 @@ class BootTemplate:
         cfg = img.parent / "syslinux.cfg"
         cfg.write_text(render_stick_syslinux_cfg())
         _run(["mcopy", *target, str(cfg), "::/syslinux/syslinux.cfg"])
-        # SYSLINUX's mtools installer: ldlinux.sys/.c32 and the boot sector code.
-        _run(["syslinux", "--install", "--directory", "/syslinux", str(img)])
-        _sync_backup_boot_sector(img)
+        if template_bios(settings):
+            # SYSLINUX's mtools installer: ldlinux.sys/.c32 and the boot sector code.
+            _run([BIOS_TOOL, "--install", "--directory", "/syslinux", str(img)])
+            _sync_backup_boot_sector(img)
         return fat_used_bytes(img)
 
 

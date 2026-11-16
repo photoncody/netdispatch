@@ -122,6 +122,8 @@ def cmd_create(a) -> None:
     tmpl, headers = api(a.hub, f"/api/usb/app/boot-template?size_mb={boot_mb}&offset={boot_start}", key=key)
     head = gzip.decompress(tmpl)
     assert len(mbr) == 440 and len(head) == int(headers["X-ND-Head-Bytes"])
+    if headers.get("X-ND-Bios") != "1":
+        print("  note: this hub can't install SYSLINUX (arm64): the stick won't boot on legacy BIOS")
     with open(dev, "r+b") as f:
         f.write(mbr)  # boot code only: the partition table stays
         f.seek(boot_start * SECTOR)

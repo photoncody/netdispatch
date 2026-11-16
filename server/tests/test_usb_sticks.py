@@ -6,6 +6,7 @@ from __future__ import annotations
 import gzip
 import os
 import re
+import shutil
 import subprocess
 from datetime import timedelta
 
@@ -326,6 +327,22 @@ def test_stick_boot_offers_l_in_the_hold_loop(client):
     assert "prompt --key l" not in plain and "sleep 5" in plain
 
 
+def test_full_profile_fits_the_image_list(client, setup):
+    """The stick's image list goes into its iPXE scripts: a layout request with
+    the most images it may name (100, with long ids) still renders."""
+    have = {str(i): "a" * 64 for i in range(100000, 100100)}
+    _layout(client, setup, have)
+
+
+def test_manifest_encodes_paths(client, setup, settings, app):
+    make_tree(settings.extracted_dir / str(setup["iso"]), ["sources/$OEM$/My Script.cmd"])
+    app.state.stick_images.forget(setup["iso"])  # memoised when the profile was made
+    m = client.get(f"{APP}/sticks/{setup['sid']}/manifest", headers={"X-Stick-Key": setup["skey"]}).json()
+    (f,) = [f for f in m["images"][0]["files"] if f["dest"].endswith("My Script.cmd")]
+    assert f["src"].endswith("/tree/sources/%24OEM%24/My%20Script.cmd")
+    assert f["cache"] == f"tree/{setup['iso']}/sources/%24oem%24/my%20script.cmd"
+
+
 def test_stick_child_script_returns_to_the_stick():
     s = render_media_script("http://hub", efi=True, media="usb", stick=StickRef("a1b2c3d4e5f6", "3:abcdef12"))
     assert "&stick=${nd-stick}&have=${nd-have}" in s
@@ -396,8 +413,13 @@ def test_boot_template(client, setup, settings, tmp_path, template_tools):
     listing = subprocess.run(
         ["mdir", "-i", str(img), "-a", "-/", "-b", "::/"], capture_output=True, text=True, env={"MTOOLS_SKIP_CHECK": "1"}
     ).stdout
-    for path in ("EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/ipxe.efi", "EFI/BOOT/net/ipxe.efi", "EFI/BOOT/native/ipxe.efi",
-                 "syslinux/ldlinux.sys", "syslinux/ldlinux.c32", "syslinux/ipxe.lkrn", "syslinux/syslinux.cfg", "netdispatch/wimboot"):
+    paths = ["EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/ipxe.efi", "EFI/BOOT/net/ipxe.efi", "EFI/BOOT/native/ipxe.efi",
+             "syslinux/ipxe.lkrn", "syslinux/syslinux.cfg", "netdispatch/wimboot"]
+    bios = r.headers["x-nd-bios"] == "1"
+    assert bios == (shutil.which("syslinux") is not None)
+    if bios:
+        paths += ["syslinux/ldlinux.sys", "syslinux/ldlinux.c32"]
+    for path in paths:
         assert f"::/{path}" in listing, listing
     # The parent is the signed snponly build, the child the signed full one.
     got = tmp_path / "parent.efi"

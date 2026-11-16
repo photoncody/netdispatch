@@ -485,7 +485,11 @@ def app_boot_template(request: Request, size_mb: int, offset: int, db: Session =
         path,
         media_type="application/gzip",
         filename=f"netdispatch-boot-{size_mb}.img.gz",
-        headers={"X-ND-Head-Bytes": str(meta["head_bytes"]), "X-ND-Boot-Files": meta["version"]},
+        headers={
+            "X-ND-Head-Bytes": str(meta["head_bytes"]),
+            "X-ND-Boot-Files": meta["version"],
+            "X-ND-Bios": "1" if meta.get("bios") else "0",
+        },
     )
 
 
