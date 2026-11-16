@@ -11,5 +11,8 @@ server/unattendgen/external/
 server/unattendgen/**/bin/
 server/unattendgen/**/obj/
 server/unattendgen/**/TestResults/
+server/usbcreator/**/bin/
+server/usbcreator/**/obj/
+server/usbcreator/**/TestResults/
 relay/certs/*.pem
 relay/certs/*.crt

@@ -439,3 +439,18 @@ def test_usb_info_lists_stick_problems(admin, tmp_path):
     info = admin.get("/api/usb/info").json()
     assert "sticks" in info and isinstance(info["stick_problems"], list)
 
+
+
+def test_usb_creator_download(client, admin, settings):
+    exe = settings.usb_assets_dir / "netdispatch-usb-creator.exe"
+    if not exe.is_file() and os.environ.get("NETDISPATCH_REQUIRE_USB_TOOLS") == "1":
+        pytest.fail(f"USB Creator missing at {exe}")
+    assert admin.get("/api/usb/info").json()["creator"] == exe.is_file()
+    r = admin.get("/api/usb/creator")
+    if exe.is_file():
+        assert r.status_code == 200 and r.content[:2] == b"MZ"
+        assert "netdispatch-usb-creator.exe" in r.headers["content-disposition"]
+    else:
+        assert r.status_code == 404
+    anon = TestClient(client.app, base_url="https://testserver")
+    assert anon.get("/api/usb/creator").status_code == 401

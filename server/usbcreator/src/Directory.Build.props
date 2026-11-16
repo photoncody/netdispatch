@@ -1,0 +1,15 @@
+<Project>
+  <!-- Shared settings for USB Creator's projects (imported from tests/ too). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- See server/unattendgen/src/Directory.Build.props: keeps packages.lock.json stable
+         between a plain restore and a single-file publish. -->
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Hub client, sync engine and stick sizing. No OS-specific code: tested on Linux. -->
+  <PropertyGroup>
+    <RootNamespace>Netdispatch.UsbCreator.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Netdispatch.UsbCreator.Tests" />
+  </ItemGroup>
+</Project>

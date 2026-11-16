@@ -81,6 +81,34 @@ COPY unattendgen/src ./src
 COPY unattendgen/tests ./tests
 RUN dotnet test --solution Unattendgen.slnx --no-restore -c Release
 
+# ---------------------------------------------------------------- USB Creator
+# The Windows app that writes USB sticks (usbcreator/), published as one self-contained
+# win-x64 .exe that the hub serves at /api/usb/creator. Cross-built on the build platform.
+# Same pinned SDK as unattendgen-base: keep the two digests in step.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2 AS usbcreator-base
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1
+WORKDIR /src
+COPY usbcreator/global.json usbcreator/UsbCreator.slnx ./
+COPY usbcreator/src/Directory.Build.props ./src/
+COPY usbcreator/src/Core/Netdispatch.UsbCreator.Core.csproj usbcreator/src/Core/packages.lock.json ./src/Core/
+COPY usbcreator/src/Windows/Netdispatch.UsbCreator.Windows.csproj usbcreator/src/Windows/packages.lock.json ./src/Windows/
+COPY usbcreator/src/App/Netdispatch.UsbCreator.App.csproj usbcreator/src/App/packages.lock.json ./src/App/
+COPY usbcreator/tests/Directory.Build.props ./tests/
+COPY usbcreator/tests/Tests/Netdispatch.UsbCreator.Tests.csproj usbcreator/tests/Tests/packages.lock.json ./tests/Tests/
+RUN dotnet restore UsbCreator.slnx --locked-mode
+COPY usbcreator/src ./src
+COPY usbcreator/tests ./tests
+
+FROM usbcreator-base AS usbcreator
+RUN dotnet publish src/App/Netdispatch.UsbCreator.App.csproj --no-restore -c Release -r win-x64 \
+      --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+      -p:EnableCompressionInSingleFile=true -p:DebugType=none -o /out \
+ && ls -l /out
+
+FROM usbcreator-base AS usbcreator-test
+RUN dotnet test --solution UsbCreator.slnx --no-restore -c Release
+
 # ---------------------------------------------------------------- boot media: signed iPXE
 # Boot media start UEFI machines through the iPXE project's shim, signed by
 # Microsoft, which loads the iPXE-signed ipxe.efi (the online ISO, and a stick's
@@ -160,6 +188,7 @@ COPY --from=assets /out/wimboot /opt/netdispatch/wimboot
 COPY --from=ipxe-signed /out/ /opt/netdispatch/usb/
 COPY --from=ipxe-media /out/ /opt/netdispatch/usb/
 COPY --from=unattendgen /out/netdispatch-unattendgen /opt/netdispatch/netdispatch-unattendgen
+COPY --from=usbcreator /out/netdispatch-usb-creator.exe /opt/netdispatch/usb/netdispatch-usb-creator.exe
 COPY unattendgen/THIRD-PARTY-NOTICES.md /opt/netdispatch/licenses/unattendgen-THIRD-PARTY-NOTICES.md
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
