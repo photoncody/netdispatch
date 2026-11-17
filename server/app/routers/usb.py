@@ -15,8 +15,9 @@ from ..database import get_db
 from ..pxe_engine import normalize_mac
 from ..relay_cache import relay_for_client
 from ..usb_media import MediaError, missing_requirements
-from ..usb_sticks import template_bios, template_missing
-from ..usb_scripts import check_hub_url, render_media_handoff
+from ..models import STATE_BOOTING, STATE_DEPLOYING, Device
+from ..usb_sticks import stick_updates, template_bios, template_missing, updater_missing
+from ..usb_scripts import StickUpdate, check_hub_url, render_media_handoff
 from .boot import _clean_ip, ipxe_response
 
 log = logging.getLogger("netdispatch.usb")
@@ -33,6 +34,7 @@ def usb_boot(
     media: str = "",
     stick: str = "",
     have: str = "",
+    images: str = "",
     platform: str = "",
     db: Session = Depends(get_db),
 ):
@@ -45,17 +47,32 @@ def usb_boot(
     stick_id = stick if _STICK_ID.match(stick) else ""
     # The hold loop offers L to go back to the stick's own images (UEFI only).
     usb_menu = bool(stick_id) and platform == "efi" and have not in ("", "-")
+    update = None
+    if stick_id and not updater_missing(settings):
+        device = db.query(Device).filter(Device.mac == normalize_mac(mac)).one_or_none() if normalize_mac(mac) else None
+        # A deployment in progress (dispatched, or Windows Setup rebooting) goes first.
+        if device is None or device.state not in (STATE_DEPLOYING, STATE_BOOTING):
+            changed = stick_updates(
+                db, settings, request.app.state.stick_images, stick_id, have, wants_images=images == "1"
+            )
+            if changed:
+                update = StickUpdate(stick_id, changed)
     log.info(
-        "boot media (%s%s) %s at %s: relay %s",
+        "boot media (%s%s) %s at %s: relay %s%s",
         (media or "?")[:16],
         f" {stick_id}" if stick_id else "",
         normalize_mac(mac) or "?",
         client_ip or "?",
         relay.id if relay else "none",
+        f", offering an update ({len(update.images)} image(s))" if update else "",
     )
     return ipxe_response(
         render_media_handoff(
-            settings.boot_url, relay.id if relay else None, relay.name if relay else None, usb_menu=usb_menu
+            settings.boot_url,
+            relay.id if relay else None,
+            relay.name if relay else None,
+            usb_menu=usb_menu,
+            update=update,
         )
     )
 
@@ -81,6 +98,7 @@ def usb_info(request: Request):
         "stick_problems": stick_problems,
         "stick_bios": template_bios(settings),
         "creator": (settings.usb_assets_dir / CREATOR_EXE).is_file(),
+        "updater": not updater_missing(settings),
     }
 
 

@@ -19,7 +19,7 @@
 #   vm.sh iso-uefi-native  like iso-uefi with a pcnet NIC: no driver in OVMF or the signed iPXE (no
 #                       option ROM), so the ISO must chain iPXE's own drivers.
 #                       Same taps as bios/uefi/uefi-sb/uefi: don't run them at once.
-#   vm.sh usb-uefi      boot a USB stick image ($ND_STICK, default /var/tmp/nd-stick.img,
+#   vm.sh usb-uefi      boot a USB stick image ($ND_STICK, default /var/tmp/nd-stick.img, raw or .qcow2,
 #   vm.sh usb-uefi-sb   made with make-stick.py) from xHCI, NIC on the test LAN, diskless.
 #   vm.sh usb-bios      MACs 52:54:00:aa:00:0a/0b/0c. Same taps as uefi/uefi-sb/bios.
 #   vm.sh usb-win [new]     offline install target: the stick first, then an NVMe disk
@@ -116,7 +116,10 @@ case "$mode" in
   usb-*)
     stick="${ND_STICK:-/var/tmp/nd-stick.img}"
     [ -f "$stick" ] || { echo "no stick image at $stick (make one with make-stick.py or set ND_STICK)"; exit 1; }
-    usb="-device qemu-xhci,id=xhci -drive if=none,id=stick,format=raw,cache=unsafe,file=$stick -device usb-storage,bus=xhci.0,drive=stick,bootindex=1"
+    # A .qcow2 stick (an overlay on a raw stick image, say) keeps the original untouched.
+    fmt=raw
+    case "$stick" in *.qcow2) fmt=qcow2 ;; esac
+    usb="-device qemu-xhci,id=xhci -drive if=none,id=stick,format=$fmt,cache=unsafe,file=$stick -device usb-storage,bus=xhci.0,drive=stick,bootindex=1"
     case "$mode" in
       usb-win|usb-win-sb)
         [ -n "$kvm" ] || { echo "$mode needs KVM (/dev/kvm)"; exit 1; }

@@ -35,6 +35,8 @@ public class SyncEngineTests
         Assert.Equal(2, hub.LayoutRequests.Count);
         Assert.Empty(hub.LayoutRequests[0]);
         Assert.Equal(image.Etag, hub.LayoutRequests[1]["7"]);
+        // Meant to carry images even while it holds none, so its boot scripts ask for updates.
+        Assert.Equal([true, true], hub.LayoutImages);
         Assert.Contains("item 7", stick.Read("boot", "EFI/BOOT/autoexec.ipxe"), StringComparison.Ordinal);
         Assert.Equal("@echo off\r\n", stick.Read("boot", "netdispatch/entry/1/netdispatch.cmd"));
         var state = StickState.Load(stick.Roots)!;
@@ -213,6 +215,55 @@ public class SyncEngineTests
     {
         var roots = new StickRoots("/b", "/d");
         Assert.Throws<HubException>(() => roots.Resolve("data", path));
+    }
+
+    [Theory]
+    [InlineData(-18000)] // written on Windows in UTC-5, read by the updater (UTC)
+    [InlineData(19800)]  // UTC+5:30
+    public async Task BootTimesShiftedByAnotherTimeZoneAreNotDownloadedAgain(long shift)
+    {
+        var (hub, stick, engine) = Setup();
+        using var _ = stick;
+        var image = Windows(hub);
+        await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+        // Another OS reads every NDBOOT time (and the probe) shifted by its zone.
+        foreach (var f in Directory.EnumerateFiles(stick.Roots.Boot, "*", SearchOption.AllDirectories))
+        {
+            File.SetLastWriteTimeUtc(f, File.GetLastWriteTimeUtc(f).AddSeconds(shift));
+        }
+        hub.Downloads.Clear();
+
+        await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+
+        Assert.Empty(hub.Downloads);
+        var wim = image.Files!.Single(f => f.Dest.EndsWith("boot.wim", StringComparison.Ordinal));
+        Assert.Equal(wim.Mtime, new DateTimeOffset(File.GetLastWriteTimeUtc(stick.Roots.Resolve("boot", wim.Dest))).ToUnixTimeSeconds());
+        Assert.Equal(SyncEngine.ClockProbeTime,
+            new DateTimeOffset(File.GetLastWriteTimeUtc(stick.Roots.Resolve("boot", SyncEngine.ClockProbe))).ToUnixTimeSeconds());
+    }
+
+    [Fact]
+    public async Task ChangedFileOfTheSameSizeAnHourLaterIsDownloaded()
+    {
+        var (hub, stick, engine) = Setup();
+        using var _ = stick;
+        var image = Windows(hub);
+        await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+        // install.wim and boot.wim change content but not size, an hour later; the probe says
+        // NDBOOT's clock isn't shifted.
+        var changed = image.Files!.Select(f => f.Dest.EndsWith(".wim", StringComparison.Ordinal) ? f with { Mtime = f.Mtime + 3600 } : f).ToList();
+        foreach (var f in changed.Where(f => f.Dest.EndsWith(".wim", StringComparison.Ordinal)))
+        {
+            hub.Files[f.Src] = [.. hub.Files[f.Src].Select(_ => (byte)'X')];
+        }
+        hub.Images[0] = image with { Files = changed, Etag = new string('e', 64) };
+        hub.Downloads.Clear();
+
+        await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, hub.Downloads.Count);
+        Assert.Equal("XXXXX", stick.Read("boot", "netdispatch/boot/7/boot.wim"));
+        Assert.Equal("XXXXXXXXX", stick.Read("data", "netdispatch/img/7/sources/install.wim"));
     }
 
     [Fact]

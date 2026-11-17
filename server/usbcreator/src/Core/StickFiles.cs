@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 
 namespace Netdispatch.UsbCreator.Core;
@@ -100,4 +101,21 @@ public static class StickSizing
     /// 256 MiB to spare, the boot partition, and the 1 MiB before the first partition.</summary>
     public static long RequiredBytes(long dataBytes, int bootMegabytes) =>
         dataBytes + dataBytes / 32 + 256 * MiB + bootMegabytes * MiB + MiB;
+}
+
+/// <summary>The boot partition's template as the hub sends it: the gzipped head of a FAT32
+/// image, written at the partition's start.</summary>
+public static class BootTemplates
+{
+    public static byte[] Unpack(BootTemplate template)
+    {
+        using var gz = new GZipStream(new MemoryStream(template.Gzipped), CompressionMode.Decompress);
+        using var head = new MemoryStream();
+        gz.CopyTo(head);
+        if (head.Length != template.HeadBytes)
+        {
+            throw new HubException($"boot template: got {head.Length} bytes, expected {template.HeadBytes}");
+        }
+        return head.ToArray();
+    }
 }

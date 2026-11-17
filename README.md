@@ -570,7 +570,21 @@ Limitations:
 - Images on the stick are **UEFI only** and limited to **Windows Setup and WinPE** images. Legacy BIOS machines boot sticks online only, and only sticks from a hub on x86-64: on arm64 the hub can't install SYSLINUX, so its sticks are UEFI-only.
 - **Some firmware loses the stick** once the network part of the stick has run: if a stick image fails to load after the network was tried, restart the machine and press **L** at the first prompt. Network deployments are unaffected.
 - With Secure Boot on, the firmware must provide the network driver, as for the online ISO.
-- The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*. Plug an outdated stick into a PC with USB Creator and press **Update stick**.
+- The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*.
+
+#### Keeping sticks up to date
+
+A stick with images checks them whenever it boots on the network. When the hub has a newer version of one of them, or the profile gained an image, the stick says so and waits 10 seconds:
+
+```
+netdispatch :: this USB stick is out of date: Windows 11 24H2 (newer on the hub)
+netdispatch :: press Y to update the stick now, or wait to boot as usual
+```
+
+- **Y** starts the stick updater, a small Linux system from the hub. It finds the stick, gets an address by DHCP and downloads only the files that changed, from the site's relay when the relay has a current copy. It then shows the result and restarts the machine. An interrupted update can be run again: the stick keeps every image that was complete, and the copy resumes.
+- **No key** boots as usual. The prompt isn't shown while a deployment to the machine is in progress, nor for sticks without images, and an image the stick couldn't hold (too big, for example) isn't offered on every boot.
+- The updater needs **Secure Boot off**: it isn't signed, so with Secure Boot on the firmware refuses it, the stick says so and boots as usual. Update such a stick with USB Creator instead.
+- With USB Creator: plug the stick into a Windows PC and press **Update stick**.
 
 #### USB Creator
 

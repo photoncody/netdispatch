@@ -94,6 +94,7 @@ COPY usbcreator/src/Directory.Build.props ./src/
 COPY usbcreator/src/Core/Netdispatch.UsbCreator.Core.csproj usbcreator/src/Core/packages.lock.json ./src/Core/
 COPY usbcreator/src/Windows/Netdispatch.UsbCreator.Windows.csproj usbcreator/src/Windows/packages.lock.json ./src/Windows/
 COPY usbcreator/src/App/Netdispatch.UsbCreator.App.csproj usbcreator/src/App/packages.lock.json ./src/App/
+COPY usbcreator/src/Updater/Netdispatch.UsbCreator.Updater.csproj usbcreator/src/Updater/packages.lock.json ./src/Updater/
 COPY usbcreator/tests/Directory.Build.props ./tests/
 COPY usbcreator/tests/Tests/Netdispatch.UsbCreator.Tests.csproj usbcreator/tests/Tests/packages.lock.json ./tests/Tests/
 RUN dotnet restore UsbCreator.slnx --locked-mode
@@ -108,6 +109,20 @@ RUN dotnet publish src/App/Netdispatch.UsbCreator.App.csproj --no-restore -c Rel
 
 FROM usbcreator-base AS usbcreator-test
 RUN dotnet test --solution UsbCreator.slnx --no-restore -c Release
+
+# ---------------------------------------------------------------- USB stick updater
+# The Linux image a stick boots to update itself (usbupdater/): Alpine's x86_64 kernel and
+# an initramfs around netdispatch-stick-update (usbcreator/src/Updater), the sync engine
+# USB Creator uses. Served at /files/boot/ndusb-vmlinuz and /files/boot/ndusb-initramfs.
+FROM usbcreator-base AS stick-updater-app
+RUN dotnet publish src/Updater/Netdispatch.UsbCreator.Updater.csproj --no-restore -c Release -r linux-musl-x64 \
+      --self-contained -p:DebugType=none -o /out
+
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS stick-updater
+RUN apk add --no-cache cpio kmod tar xz
+COPY usbupdater /build
+COPY --from=stick-updater-app /out /app
+RUN sh /build/build.sh /app /out
 
 # ---------------------------------------------------------------- boot media: signed iPXE
 # Boot media start UEFI machines through the iPXE project's shim, signed by
@@ -189,6 +204,7 @@ COPY --from=ipxe-signed /out/ /opt/netdispatch/usb/
 COPY --from=ipxe-media /out/ /opt/netdispatch/usb/
 COPY --from=unattendgen /out/netdispatch-unattendgen /opt/netdispatch/netdispatch-unattendgen
 COPY --from=usbcreator /out/netdispatch-usb-creator.exe /opt/netdispatch/usb/netdispatch-usb-creator.exe
+COPY --from=stick-updater /out/ndusb-vmlinuz /out/ndusb-initramfs /opt/netdispatch/usb/
 COPY unattendgen/THIRD-PARTY-NOTICES.md /opt/netdispatch/licenses/unattendgen-THIRD-PARTY-NOTICES.md
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

@@ -1,6 +1,8 @@
 """/files/* - unauthenticated payload downloads for booting clients.
 
-* ``/files/boot/{wimboot,memdisk}``  bundled boot helpers
+* ``/files/boot/{wimboot,memdisk}``  bundled boot helpers, and the USB stick
+  updater's ``ndusb-vmlinuz`` / ``ndusb-initramfs`` (no secrets: the stick
+  authenticates with its own key once the updater runs)
 * ``/files/iso/{id}/raw/{filename}`` the raw image (sanboot / memdisk / casper url=)
 * ``/files/iso/{id}/tree/{path}``    files extracted from the image (kernel, WIM, ...)
 * ``/files/d/{token}/{name}``        per-deployment generated files (secret-bearing:
@@ -26,6 +28,7 @@ from ..iso_tools import resolve_ci
 from ..models import ISO_READY, STATE_BOOTING, STATE_DEPLOYING, Device, IsoImage
 from ..relay_cache import usable_cache
 from ..unattend import device_context, read_template, render
+from ..usb_scripts import UPDATER_INITRD, UPDATER_KERNEL
 from ..winpe import WINPESHL_INI, render_netdispatch_cmd
 
 log = logging.getLogger("netdispatch.files")
@@ -41,7 +44,12 @@ def _not_found() -> HTTPException:
 @router.api_route("/files/boot/{name}", methods=["GET", "HEAD"])
 def boot_helper(name: str, request: Request):
     settings: Settings = request.app.state.settings
-    paths = {"wimboot": settings.wimboot_path, "memdisk": settings.memdisk_path}
+    paths = {
+        "wimboot": settings.wimboot_path,
+        "memdisk": settings.memdisk_path,
+        UPDATER_KERNEL: settings.usb_assets_dir / UPDATER_KERNEL,
+        UPDATER_INITRD: settings.usb_assets_dir / UPDATER_INITRD,
+    }
     path = paths.get(name)
     if path is None or not path.is_file():
         raise _not_found()

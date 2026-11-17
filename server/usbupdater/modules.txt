@@ -1,0 +1,40 @@
+# Kernel modules the stick updater loads at start-up (build.sh adds their dependencies).
+# USB storage and keyboards
+xhci-pci
+ehci-pci
+ohci-pci
+uhci-hcd
+usb-storage
+uas
+sd_mod
+usbhid
+hid-generic
+# File systems: NDDATA (exFAT) and NDBOOT (FAT32)
+exfat
+vfat
+nls_cp437
+nls_iso8859-1
+nls_utf8
+# Raw sockets for udhcpc
+af_packet
+# Network adapters: common wired NICs, USB adapters, virtual machines
+e1000
+e1000e
+igb
+igc
+ixgbe
+r8169
+realtek
+tg3
+bnx2
+bnxt_en
+atlantic
+alx
+atl1c
+r8152
+ax88179_178a
+asix
+cdc_ether
+virtio_pci
+virtio_net
+vmxnet3

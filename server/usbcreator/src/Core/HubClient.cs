@@ -71,11 +71,13 @@ public sealed class HubClient
         SendAsync<Manifest>(HttpMethod.Get, $"sticks/{Uri.EscapeDataString(stickId)}/manifest", null, auth, ct);
 
     /// <param name="have">ISO id to the etag of the complete copy the stick holds.</param>
-    public Task<Layout> GetLayoutAsync(HubAuth auth, string stickId, IReadOnlyDictionary<int, string> have, CancellationToken ct = default) =>
+    /// <param name="images">Whether the stick is meant to carry images (not online-only),
+    /// even while it holds none: its boot scripts then still ask the hub for updates.</param>
+    public Task<Layout> GetLayoutAsync(HubAuth auth, string stickId, IReadOnlyDictionary<int, string> have, bool images, CancellationToken ct = default) =>
         SendAsync<Layout>(
             HttpMethod.Post,
             $"sticks/{Uri.EscapeDataString(stickId)}/layout",
-            new { have = have.ToDictionary(kv => kv.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), kv => kv.Value) },
+            new { have = have.ToDictionary(kv => kv.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), kv => kv.Value), images },
             auth,
             ct);
 
