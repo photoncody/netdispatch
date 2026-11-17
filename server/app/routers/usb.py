@@ -34,6 +34,7 @@ def usb_boot(
     media: str = "",
     stick: str = "",
     have: str = "",
+    images: str = "",
     platform: str = "",
     db: Session = Depends(get_db),
 ):
@@ -51,7 +52,9 @@ def usb_boot(
         device = db.query(Device).filter(Device.mac == normalize_mac(mac)).one_or_none() if normalize_mac(mac) else None
         # A deployment in progress (dispatched, or Windows Setup rebooting) goes first.
         if device is None or device.state not in (STATE_DEPLOYING, STATE_BOOTING):
-            changed = stick_updates(db, settings, request.app.state.stick_images, stick_id, have)
+            changed = stick_updates(
+                db, settings, request.app.state.stick_images, stick_id, have, wants_images=images == "1"
+            )
             if changed:
                 update = StickUpdate(stick_id, changed)
     log.info(

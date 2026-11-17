@@ -16,6 +16,7 @@ internal sealed class FakeHub : HttpMessageHandler
     public List<ManifestImage> Images { get; } = [];
     public string BootFiles { get; set; } = "bootv1";
     public List<Dictionary<string, string>> LayoutRequests { get; } = [];
+    public List<bool> LayoutImages { get; } = [];
     public List<JsonElement> Reports { get; } = [];
     public List<(string Url, long? From)> Downloads { get; } = [];
     public HashSet<string> Broken { get; } = [];
@@ -62,6 +63,7 @@ internal sealed class FakeHub : HttpMessageHandler
             var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement;
             var have = body.GetProperty("have").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!);
             LayoutRequests.Add(have);
+            LayoutImages.Add(body.GetProperty("images").GetBoolean());
             var menu = string.Join("\n", have.Keys.Order().Select(id => $"item {id}"));
             return Json(new
             {

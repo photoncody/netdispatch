@@ -430,7 +430,9 @@ def app_manifest(stick_id: str, request: Request, db: Session = Depends(get_db))
 def app_layout(stick_id: str, body: UsbLayoutIn, request: Request, db: Session = Depends(get_db)):
     stick = _stick(request, db, stick_id)
     try:
-        doc = render_layout(db, request.app.state.settings, stick, parse_have(body.have))
+        have = parse_have(body.have)
+        images = body.images if body.images is not None else bool(have)
+        doc = render_layout(db, request.app.state.settings, stick, have, images=images)
     except ValueError as e:
         raise HTTPException(503, str(e)) from e
     db.commit()

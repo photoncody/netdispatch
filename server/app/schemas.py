@@ -269,6 +269,9 @@ class UsbStickCreateIn(BaseModel):
 class UsbLayoutIn(BaseModel):
     # iso id -> etag of the copy the stick holds
     have: dict[str, str] = Field(default_factory=dict, max_length=100)
+    # The stick is meant to carry images (not online-only), even while it holds none
+    # (an interrupted update). Older writers don't send it: then "holds any".
+    images: bool | None = None
 
 
 class UsbStickItemIn(BaseModel):

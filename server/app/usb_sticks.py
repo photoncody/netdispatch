@@ -354,17 +354,21 @@ def parse_have(have: dict) -> dict[int, str]:
     return out
 
 
-def stick_updates(db: Session, settings: Settings, images: StickManifests, stick_id: str, have: str) -> list[str]:
+def stick_updates(
+    db: Session, settings: Settings, images: StickManifests, stick_id: str, have: str, wants_images: bool = False
+) -> list[str]:
     """What a booting stick is behind on, for ``/usb/boot``'s update prompt:
     images whose copy (``have``, as the stick's network script sends it)
     differs from the hub's, and profile images the stick doesn't hold yet.
 
-    Nothing for an online-only stick (it holds no images, and the updater
-    only adds them where a writer chose to), a revoked or unknown stick, or
-    images the hub is still preparing. An image the stick last reported as
-    failed (too big, a broken file) isn't offered again on every boot."""
+    Nothing for an online-only stick (``wants_images`` false and no images:
+    the updater only adds images where a writer chose to), a revoked or
+    unknown stick, or images the hub is still preparing. A stick meant to
+    carry images that holds none - an update was interrupted - is offered
+    them all. An image the stick last reported as failed (too big, a broken
+    file) isn't offered again on every boot."""
     held = parse_have_ref(have)
-    if not held:
+    if not held and not wants_images:
         return []
     stick = db.get(UsbStick, stick_id)
     if stick is None or stick.revoked:
@@ -394,7 +398,9 @@ def updater_missing(settings: Settings) -> bool:
     return not all((settings.usb_assets_dir / n).is_file() for n in (UPDATER_KERNEL, UPDATER_INITRD))
 
 
-def render_layout(db: Session, settings: Settings, stick: UsbStick, have: dict[int, str]) -> dict:
+def render_layout(
+    db: Session, settings: Settings, stick: UsbStick, have: dict[int, str], *, images: bool = False
+) -> dict:
     """The small files a writer puts on the stick, for the images it holds
     (``have``: iso id -> etag of the copy). Entries whose image it doesn't
     hold are left out of the menu."""
@@ -437,7 +443,7 @@ def render_layout(db: Session, settings: Settings, stick: UsbStick, have: dict[i
             )
         )
 
-    ref = StickRef(stick.id, ",".join(f"{i}:{e[:8]}" for i, e in sorted(have.items())))
+    ref = StickRef(stick.id, ",".join(f"{i}:{e[:8]}" for i, e in sorted(have.items())), images=images or bool(have))
     name = stick.name
     add(PART_BOOT, f"{EFI_DIR}/autoexec.ipxe", render_stick_parent(stick.id, name, entries))
     add(PART_BOOT, f"{STICK_DIR}/net.ipxe", render_media_script(hub, efi=True, media="usb", stick=ref))

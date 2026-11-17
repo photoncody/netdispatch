@@ -49,11 +49,19 @@ public sealed class SyncEngine
         var problems = manifest.Images.Where(i => copyImages && i.Error is not null)
             .Select(i => $"{i.Name}: {i.Error}").ToList();
 
+        // 0. NDBOOT's times as this OS sees them: see BootClockShift.
+        var shift = BootClockShift();
+        if (shift != 0)
+        {
+            NormaliseBootTimes(wanted, shift);
+        }
+        WriteClockProbe();
+
         // 1. Images that will change leave the menu until they are complete again.
         var have = state.Images
             .Where(kv => kept.Contains(kv.Key) || wanted.Any(w => w.IsoId == kv.Key && w.Etag == kv.Value))
             .ToDictionary();
-        await WriteLayoutAsync(stickId, have, problems, ct).ConfigureAwait(false);
+        await WriteLayoutAsync(stickId, have, copyImages, problems, ct).ConfigureAwait(false);
         SaveState(state with { Images = have, HubUrl = _hub.BaseUrl.ToString() });
 
         // 2. Copy.
@@ -106,7 +114,7 @@ public sealed class SyncEngine
 
         // 4. The final menu and state.
         Report("layout", null, null, done, total);
-        await WriteLayoutAsync(stickId, have, problems, ct).ConfigureAwait(false);
+        await WriteLayoutAsync(stickId, have, copyImages, problems, ct).ConfigureAwait(false);
         SaveState(state with { Images = have, BootFiles = manifest.BootFiles, HubUrl = _hub.BaseUrl.ToString() });
         await _hub.ReportAsync(_auth, stickId, report, ct).ConfigureAwait(false);
         Report("done", null, null, total, total);
@@ -131,9 +139,9 @@ public sealed class SyncEngine
 
     private void SaveState(StickState state) => state.Save(_roots);
 
-    private async Task WriteLayoutAsync(string stickId, Dictionary<int, string> have, List<string> problems, CancellationToken ct)
+    private async Task WriteLayoutAsync(string stickId, Dictionary<int, string> have, bool images, List<string> problems, CancellationToken ct)
     {
-        var layout = await _hub.GetLayoutAsync(_auth, stickId, have, ct).ConfigureAwait(false);
+        var layout = await _hub.GetLayoutAsync(_auth, stickId, have, images, ct).ConfigureAwait(false);
         foreach (var dir in layout.ReplaceDirs)
         {
             var path = _roots.Resolve(dir.Part, dir.Path);
@@ -160,21 +168,52 @@ public sealed class SyncEngine
             return false;
         }
         var mtime = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeSeconds();
-        return SameMtime(mtime, file.Mtime);
+        return Math.Abs(mtime - file.Mtime) <= MtimeSlackSeconds;
     }
 
-    /// <summary>FAT keeps local time without a zone, so a stick written on Windows in one
-    /// time zone and read by the Linux updater (UTC) shows every time shifted by the zone's
-    /// offset. A shift by whole quarter hours, up to 14 hours, therefore still matches.</summary>
-    internal static bool SameMtime(long actual, long expected)
+    /// <summary>An empty file on NDBOOT whose time every sync sets to <see cref="ClockProbeTime"/>.</summary>
+    internal const string ClockProbe = "netdispatch/clock.probe";
+    internal const long ClockProbeTime = 1_600_000_000;
+
+    /// <summary>How far NDBOOT's times are off as this OS reads them. FAT keeps local time
+    /// without a zone: a stick last written on Windows in UTC-5 and read by the Linux updater
+    /// (UTC) shows every time 5 hours early, and back. The probe the last writer left measures
+    /// that one shift; files on exFAT (NDDATA) carry their zone and are never shifted.</summary>
+    private long BootClockShift()
     {
-        var diff = Math.Abs(actual - expected);
-        if (diff > 14 * 3600 + MtimeSlackSeconds)
+        var probe = new FileInfo(_roots.Resolve(StickRoots.BootPart, ClockProbe));
+        if (!probe.Exists)
         {
-            return false;
+            return 0;
         }
-        var off = diff % 900;
-        return off <= MtimeSlackSeconds || off >= 900 - MtimeSlackSeconds;
+        var shift = new DateTimeOffset(probe.LastWriteTimeUtc).ToUnixTimeSeconds() - ClockProbeTime;
+        return Math.Abs(shift) <= 14 * 3600 + MtimeSlackSeconds ? shift : 0;
+    }
+
+    /// <summary>Give NDBOOT files that are current except for the measured shift their
+    /// hub time as this OS writes it, so the stick is consistent with the new probe.</summary>
+    private void NormaliseBootTimes(IEnumerable<ManifestImage> images, long shift)
+    {
+        foreach (var file in images.SelectMany(i => i.Files!).Where(f => f.Part == StickRoots.BootPart))
+        {
+            var info = new FileInfo(_roots.Resolve(file.Part, file.Dest));
+            if (info.Exists && info.Length == file.Size
+                && Math.Abs(new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeSeconds() - shift - file.Mtime) <= MtimeSlackSeconds)
+            {
+                File.SetLastWriteTimeUtc(info.FullName, DateTimeOffset.FromUnixTimeSeconds(file.Mtime).UtcDateTime);
+            }
+        }
+    }
+
+    private void WriteClockProbe()
+    {
+        var path = _roots.Resolve(StickRoots.BootPart, ClockProbe);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        if (!File.Exists(path))
+        {
+            File.WriteAllBytes(path, []);
+        }
+        File.SetLastWriteTimeUtc(path, DateTimeOffset.FromUnixTimeSeconds(ClockProbeTime).UtcDateTime);
     }
 
     private async Task<long> DownloadAsync(ManifestImage image, ManifestFile file, string dest, Action<long> progress, CancellationToken ct)

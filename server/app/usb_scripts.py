@@ -93,6 +93,8 @@ class StickRef:
     id: str
     # "<iso id>:<etag prefix>,..." for the images the stick holds; may be empty.
     have: str = ""
+    # Meant to carry images (not online-only), even while it holds none.
+    images: bool = False
 
     def __post_init__(self):
         if not _STICK_ID.match(self.id):
@@ -154,7 +156,7 @@ def render_media_script(
     ]
     if stick is not None:
         lines += [f"set nd-stick {stick.id}", f"set nd-have {stick.have or '-'}"]
-        url += "&stick=${nd-stick}&have=${nd-have}"
+        url += "&stick=${nd-stick}&have=${nd-have}" + ("&images=1" if stick.images else "")
     if child:
         lines.append("set nd-tries:int32 0")
     lines += [

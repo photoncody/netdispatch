@@ -509,6 +509,9 @@ def test_outdated_stick_is_offered_an_update(client, setup, updater):
     ) in r
     assert "initrd -n nd-update-initrd http://10.0.0.5:8000/files/boot/ndusb-initramfs" in r
     assert r.index(":nd_boot") < r.index("chain --replace --autofree http://10.0.0.5:8000/boot?")
+    # Meant to carry images but holding none (an update was interrupted): offered again.
+    r = client.get(f"/usb/boot?mac={mac}&stick={sid}&have=-&images=1&platform=efi").text
+    assert "out of date: Windows 11 24H2 (new)" in r
     # Online-only sticks, unknown sticks and junk get no prompt.
     for q in (f"stick={sid}&have=-", f"stick={sid}&have=", "stick=ffffffffffff&have=1:00000000", f"stick={sid}&have=zz"):
         assert "press Y" not in client.get(f"/usb/boot?mac={mac}&{q}&platform=efi").text
@@ -571,3 +574,18 @@ def test_updater_files_are_served(client, settings, updater):
         r = anon.get(f"/files/boot/{name}")
         assert r.status_code == 200 and r.content == (settings.usb_assets_dir / name).read_bytes()
     assert anon.get("/files/boot/ndusb-other").status_code == 404
+
+
+def test_layout_says_whether_the_stick_wants_images(client, setup):
+    h = {"X-Stick-Key": setup["skey"]}
+    url = f"{APP}/sticks/{setup['sid']}/layout"
+
+    def net(body):
+        doc = client.post(url, json=body, headers=h).json()
+        return next(f["content"] for f in doc["files"] if f["path"] == "netdispatch/net.ipxe")
+
+    assert "&images=1" in net({"have": {}, "images": True})
+    assert "&images=1" not in net({"have": {}, "images": False})
+    assert "&images=1" not in net({"have": {}})  # older writers: "holds any"
+    etag = _etag(client, setup)
+    assert "&images=1" in net({"have": {str(setup["iso"]): etag}})

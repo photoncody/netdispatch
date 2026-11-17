@@ -154,7 +154,7 @@ def cmd_create(a) -> None:
             total_bytes = img["boot_bytes"] + img["data_bytes"]
             report.append({"iso_id": img["iso_id"], "etag": img["etag"], "status": "ready",
                            "bytes_done": total_bytes, "bytes_total": total_bytes})
-        layout = api(a.hub, f"/api/usb/app/sticks/{sid}/layout", key=key, body={"have": have})
+        layout = api(a.hub, f"/api/usb/app/sticks/{sid}/layout", key=key, body={"have": have, "images": not a.no_images})
         for problem in layout["problems"]:
             print(f"  warning: {problem}")
         for d in layout["replace_dirs"]:
