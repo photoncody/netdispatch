@@ -160,6 +160,36 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public async Task BootRewriteTakesImagesOffTheMenuUntilTheirBootFilesAreBack()
+    {
+        var (hub, stick, engine) = Setup();
+        using var _ = stick;
+        var win = Windows(hub);
+        var pe = hub.AddImage(9, "WinPE", ("boot", "boot.wim", "PE"));
+        await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+        hub.BootFiles = "bootv2";
+        Assert.True(SyncEngine.BootFilesStale(stick.Roots, hub.Manifest()));
+
+        // What StickWriter.UpdateAsync does: forget the images, then rewrite (empty) NDBOOT.
+        SyncEngine.ForgetImages(stick.Roots);
+        Directory.Delete(stick.Roots.Boot, recursive: true);
+        Directory.CreateDirectory(stick.Roots.Boot);
+        hub.Broken.Add(pe.Files![0].Src);
+        hub.Downloads.Clear();
+        hub.LayoutRequests.Clear();
+        var result = await engine.SyncAsync(hub.Manifest(), true, TestContext.Current.CancellationToken);
+
+        // Windows comes back after only its boot files were copied; WinPE stays off the menu.
+        Assert.Equal(new Dictionary<int, string> { [7] = win.Etag! }, result.Have);
+        Assert.Empty(hub.LayoutRequests[0]);
+        Assert.False(hub.LayoutRequests[^1].ContainsKey("9"));
+        Assert.Equal("WIM-1", stick.Read("boot", "netdispatch/boot/7/boot.wim"));
+        Assert.DoesNotContain(hub.Downloads, d => d.Url.Contains("install.wim", StringComparison.Ordinal));
+        Assert.False(StickState.Load(stick.Roots)!.Images.ContainsKey(9));
+        Assert.False(SyncEngine.BootFilesStale(stick.Roots, hub.Manifest()));
+    }
+
+    [Fact]
     public async Task RelayCacheIsUsedWhenTheManifestNamesOne()
     {
         var (hub, stick, engine) = Setup();

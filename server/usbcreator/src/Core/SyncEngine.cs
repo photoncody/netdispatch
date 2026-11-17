@@ -118,6 +118,17 @@ public sealed class SyncEngine
     public static bool BootFilesStale(StickRoots roots, Manifest manifest) =>
         StickState.Load(roots)?.BootFiles != manifest.BootFiles;
 
+    /// <summary>Call before the boot partition is rewritten: every image's boot files go with
+    /// it, so no image counts as on the stick until a sync has copied its boot files again.
+    /// An image that fails, or that the hub is still preparing, then stays off the menu.</summary>
+    public static void ForgetImages(StickRoots roots)
+    {
+        if (StickState.Load(roots) is { } state)
+        {
+            (state with { Images = [] }).Save(roots);
+        }
+    }
+
     private void SaveState(StickState state) => state.Save(_roots);
 
     private async Task WriteLayoutAsync(string stickId, Dictionary<int, string> have, List<string> problems, CancellationToken ct)

@@ -36,6 +36,7 @@ public sealed class StickWriter(HubClient hub, string creatorKey, IProgress<stri
         var manifest = await hub.GetManifestAsync(Auth, stickId, ct).ConfigureAwait(false);
         if (SyncEngine.BootFilesStale(roots, manifest))
         {
+            SyncEngine.ForgetImages(roots);
             await WindowsDisks.RewriteBootAsync(disk.Number, Template, log, ct).ConfigureAwait(false);
         }
         return await SyncAsync(roots, stickId, copyImages, ct, manifest).ConfigureAwait(false);

@@ -218,12 +218,21 @@ internal sealed class MainWindow : Window
         {
             return;
         }
+        // Read the controls here, on the UI thread: Avalonia refuses access from the worker.
+        var profile = SelectedProfile;
+        var name = (_name.Text ?? "").Trim();
+        var copy = _copy.IsChecked == true;
+        if (create && (profile is null || name.Length == 0))
+        {
+            return;
+        }
         if (create && !await Confirm.AskAsync(this, $"Erase {disk.Display}?",
-                $"Everything on {disk.Display} is deleted, and it becomes a netdispatch stick for the profile {SelectedProfile!.Name}."))
+                $"Everything on {disk.Display} is deleted, and it becomes a netdispatch stick for the profile {profile!.Name}."))
         {
             return;
         }
         _busy = new CancellationTokenSource();
+        var token = _busy.Token;
         UpdateButtons();
         _log.Text = "";
         var log = new Progress<string>(line => { _log.Text += line + Environment.NewLine; _status.Text = line; });
@@ -238,8 +247,8 @@ internal sealed class MainWindow : Window
         {
             var writer = new StickWriter(hub, key, log, progress);
             var result = create
-                ? await Task.Run(() => writer.CreateAsync(disk, SelectedProfile!, _name.Text!.Trim(), _copy.IsChecked == true, _busy.Token))
-                : await Task.Run(() => writer.UpdateAsync(disk, _copy.IsChecked == true, _busy.Token));
+                ? await Task.Run(() => writer.CreateAsync(disk, profile!, name, copy, token))
+                : await Task.Run(() => writer.UpdateAsync(disk, copy, token));
             foreach (var problem in result.Problems)
             {
                 ((IProgress<string>)log).Report("Warning: " + problem);
@@ -247,7 +256,7 @@ internal sealed class MainWindow : Window
             _status.Text = $"Done: {result.Have.Count} image(s) on the stick. You can remove it.";
             _progress.Value = 100;
         }
-        catch (Exception e) when (e is HubException or HttpRequestException or IOException or OperationCanceledException)
+        catch (Exception e) when (e is HubException or HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             _status.Text = "Failed: " + e.Message;
             _log.Text += "Failed: " + e.Message + Environment.NewLine;
