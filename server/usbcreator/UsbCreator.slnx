@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/App/Netdispatch.UsbCreator.App.csproj" />
+    <Project Path="src/Core/Netdispatch.UsbCreator.Core.csproj" />
+    <Project Path="src/Windows/Netdispatch.UsbCreator.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tests/Netdispatch.UsbCreator.Tests.csproj" />
+  </Folder>
+</Solution>

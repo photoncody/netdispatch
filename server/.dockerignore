@@ -4,3 +4,6 @@ unattendgen/external/
 unattendgen/**/bin/
 unattendgen/**/obj/
 unattendgen/**/TestResults/
+usbcreator/**/bin/
+usbcreator/**/obj/
+usbcreator/**/TestResults/

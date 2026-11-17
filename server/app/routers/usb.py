@@ -80,7 +80,20 @@ def usb_info(request: Request):
         "sticks": not stick_problems,
         "stick_problems": stick_problems,
         "stick_bios": template_bios(settings),
+        "creator": (settings.usb_assets_dir / CREATOR_EXE).is_file(),
     }
+
+
+CREATOR_EXE = "netdispatch-usb-creator.exe"
+
+
+@router.get("/api/usb/creator")
+def usb_creator(request: Request):
+    """USB Creator for Windows, built into the hub image (server/usbcreator)."""
+    path = request.app.state.settings.usb_assets_dir / CREATOR_EXE
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="USB Creator is not part of this hub's image")
+    return FileResponse(path, media_type="application/vnd.microsoft.portable-executable", filename=CREATOR_EXE)
 
 
 @router.get("/api/usb/online.iso")

@@ -556,7 +556,7 @@ Some machines can't network-boot: PXE is switched off or locked in the firmware,
 A netdispatch USB stick boots a machine like the online ISO does, and also carries copies of Windows images, for machines that can't reach the hub.
 
 1. **Boot media → USB stick profiles → New profile.** Add the Windows Setup or WinPE images the stick should carry, each with a menu label and, for Windows Setup, an answer file.
-2. **Write the stick with USB Creator**, a Windows app that pairs with the hub: approve the code it shows under **Boot media → USB Creator**. It partitions the stick and copies the images from the hub, or from this site's relay when the relay has them cached. USB Creator ships in a later release; until then, `tests/e2e/make-stick.py` writes a stick (or a disk image) from Linux through the same API.
+2. **Write the stick with USB Creator**, a Windows app that pairs with the hub: approve the code it shows under **Boot media → USB Creator**. It partitions the stick and copies the images from the hub, or from this site's relay when the relay has them cached. See [USB Creator](#usb-creator) below.
 3. **Boot a machine from the stick** (UEFI or legacy BIOS):
    - **Online:** after a 3-second prompt it goes onto the network, detects the site's relay and waits in the hold loop like a PXE client. Deploy it from **Devices** as usual; images come from the hub or the relay, not from the stick.
    - **Press L** at that first prompt, or in the hold loop, for the stick's own menu: its images, *Boot from local disk*, *Use the network*. The menu boots the local disk after 15 seconds, so a stick left in after Windows Setup reboots never starts another install.
@@ -570,7 +570,28 @@ Limitations:
 - Images on the stick are **UEFI only** and limited to **Windows Setup and WinPE** images. Legacy BIOS machines boot sticks online only, and only sticks from a hub on x86-64: on arm64 the hub can't install SYSLINUX, so its sticks are UEFI-only.
 - **Some firmware loses the stick** once the network part of the stick has run: if a stick image fails to load after the network was tried, restart the machine and press **L** at the first prompt. Network deployments are unaffected.
 - With Secure Boot on, the firmware must provide the network driver, as for the online ISO.
-- The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*. Updating a stick in place comes with USB Creator.
+- The **Boot media → USB sticks** list shows each stick's images as *current* or *outdated*. Plug an outdated stick into a PC with USB Creator and press **Update stick**.
+
+#### USB Creator
+
+**Boot media → Download USB Creator** gives you `netdispatch-usb-creator.exe`, a single program for Windows 10/11 x64 (about 50 MB, nothing to install). It asks for administrator rights, because it partitions and writes disks. It isn't code-signed yet, so Windows SmartScreen may say *Windows protected your PC*: choose **More info → Run anyway**.
+
+1. **Pair with the hub.** Enter the hub's address and press **Pair with hub**. The app shows a code; an admin approves it under **Boot media → USB Creator**. The app keeps its key in your Windows profile (encrypted with DPAPI), so each Windows user pairs once. Revoking the install on the hub stops it working.
+2. **Create a stick.** Pick a profile and a USB drive, give the stick a name (it appears under **Boot media → USB sticks**), and press **Create stick**. This **erases the drive**. Untick *Copy the profile's images* for a stick that only boots online; it then fits on any drive of 4 GB or more. The app shows the size the profile needs.
+3. **Update a stick.** Select a netdispatch stick and press **Update stick**. It downloads only the files that changed on the hub, removes images the profile no longer has, and rewrites the boot partition when the hub's boot files have changed. An interrupted copy resumes where it stopped.
+
+The app only lists USB drives, never the disk Windows runs from. Images come from this site's relay when the relay has a current copy, otherwise from the hub.
+
+It also runs without its window, for scripts (from an elevated prompt):
+
+```
+netdispatch-usb-creator.exe --cli pair --hub https://netdispatch.example.com
+netdispatch-usb-creator.exe --cli list
+netdispatch-usb-creator.exe --cli create --disk 3 --profile Lab --name "Lab stick 1" --yes
+netdispatch-usb-creator.exe --cli update --disk 3
+```
+
+`list` shows disk numbers. `--online-only` writes no images. On Linux, `tests/e2e/make-stick.py` writes a stick or a disk image through the same API.
 
 ## Operations: upgrades, backups, logs
 

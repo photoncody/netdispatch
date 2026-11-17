@@ -56,6 +56,7 @@ Boot chain:
 | `relay/cache-sync.sh` | `RELAY_CACHE=true`: manifest sync (resumable curl, rate limit, sync window), deletes unassigned files, writes `smb.conf`, supervises lighttpd + smbd |
 | `relay/ipxe/embed.ipxe`, `relay/ipxe/general.h` | compiled into the iPXE binaries. `embed.ipxe` is also shipped as `secureboot/autoexec.ipxe`. |
 | `relay/Dockerfile` | `ipxe` stage (compile), `ipxe-signed` stage (download signed shim + iPXE, SHA-pinned), runtime |
+| `server/usbcreator/` | USB Creator, the Windows stick writer (.NET 10, Avalonia): `src/Core` (hub client, `SyncEngine`, stick files and sizing; no OS calls), `src/Windows` (`WindowsDisks`: Storage cmdlets + raw volume writes; DPAPI `CreatorSettings`; `StickWriter`), `src/App` (window built in code, `--cli`), `tests/Tests` (xUnit against a `FakeHub` and a temp folder) |
 | `tests/e2e/` | QEMU end-to-end harness (isolated bridge, fake router DHCP, BIOS/UEFI/Windows VMs); `make-stick.py` writes a USB stick image through the stick API, like USB Creator |
 | `examples/unattend/` | tested sample templates |
 
@@ -79,6 +80,7 @@ The server Dockerfile's stages:
 - `unattendgen-base` / `unattendgen`: the .NET SDK (pinned by digest) fetches the upstream library and publishes `netdispatch-unattendgen` as one self-contained file for the target architecture. It cross-compiles on the build platform, so arm64 needs no emulation.
 - `unattendgen-test`: runs the generator's .NET tests. CI builds it; the runtime image does not depend on it.
 - `ipxe-signed` (the signed shim, `ipxe.efi` and `snponly.efi`, same pins as `relay/Dockerfile`: keep them in step) and `ipxe-media` (`ipxe.lkrn` and `ipxe-native.efi` from source) supply the boot media's files in `/opt/netdispatch/usb/`, beside ISOLINUX and SYSLINUX's `mbr.bin` from Debian. The `syslinux` package's installer (mtools build) makes the stick boot template boot on BIOS. Debian builds it for x86 only, so the arm64 image leaves it out and makes UEFI-only sticks (`template_bios()`, `X-ND-Bios: 0`).
+- `usbcreator-base` / `usbcreator` / `usbcreator-test`: USB Creator, published as one self-contained `win-x64` .exe (same pinned SDK as `unattendgen-base`: keep the digests in step). The runtime image serves it from `/opt/netdispatch/usb/` at `/api/usb/creator`. Avalonia builds on Linux, so no Windows runner is needed.
 - `test` and `runtime`. `runtime` is the last stage and therefore the default target.
 
 The generator's .NET tests on their own: `docker build --target unattendgen-test server/`. On a machine with the .NET 10 SDK: `server/unattendgen/fetch-upstream.sh && dotnet test --solution server/unattendgen/Unattendgen.slnx`. The relay build compiles iPXE (about 60 s). Any change to `relay/ipxe/*` needs a relay rebuild **and** a restart of running relays.
@@ -89,6 +91,7 @@ The generator's .NET tests on their own: `docker build --target unattendgen-test
   - `shellcheck` on every shell script, and `docker compose config` on both compose files.
   - pytest inside the Dockerfile's `test` stage, with the GHA layer cache, run with `-W error::DeprecationWarning`.
   - The unattend generator's .NET tests: the Dockerfile's `unattendgen-test` stage, which fails the build on a failing test.
+  - USB Creator's .NET tests: the `usbcreator-test` stage.
 - **`.github/workflows/images.yml`** builds `server`, `relay` and `samba` for amd64 and arm64.
   - Each architecture builds on **native** runners (`ubuntu-24.04` / `ubuntu-24.04-arm`). There's no QEMU emulation, so it stays fast.
   - Each build job pushes a per-architecture digest. The `Publish to GHCR` job then merges them into multi-arch tags on `ghcr.io/<owner>/netdispatch-<image>`:
@@ -165,6 +168,7 @@ Verified with this harness:
   - after a network attempt, OVMF has lost the stick: choosing its image shows the "restart and press L" message;
   - `usb-win` (no hub reachable): L at the first prompt, the Windows entry, the name prompt (default `ND-AA000D` from the MAC; `bad name` and `12345` refused), Setup from the stick's exFAT partition, the reboots back through the stick's menu to the disk, and the desktop with `hostname` = the typed name. About 40 minutes, most of it Setup reading from QEMU's emulated USB stick;
   - `make-stick.py` downloaded the image from the relay cache.
+- USB Creator on Windows 11 against a 16 GB VHDX (`--cli`, `--allow-virtual-disks`): pairing, an online-only stick (create, then update), converted to raw and booted in QEMU on UEFI and BIOS to the hold loop. The window itself hasn't been driven by a test.
 - With a caching relay (`RELAY_CACHE=true`):
   - the sync of Windows 11 and Debian netinst, with every cached file byte-identical to the hub's;
   - a re-check after restart without re-downloading, and a resync of only the changed file set after re-extraction;
@@ -262,6 +266,9 @@ Verified with this harness:
 - **Boot template.** The hub builds the FAT32 boot partition (mkfs.fat with the partition offset as hidden sectors, mtools, `syslinux --install`) and sends only its head up to the last used cluster (`fat_used_bytes`), gzipped; a writer writes it at the partition start and leaves the rest of the partition as it is. SYSLINUX writes its boot code to the boot sector only, so the template copies it over the FAT32 backup boot sector. Cached per size and offset in `<data_dir>/usb-cache`, keyed on the boot files (`boot_files_version`).
 - **BIOS stick local boot is drive 0x81**: the stick itself is 0x80 (`sanboot --drive 0x81`), unlike the online ISO's 0x80.
 - **Stick keys** (`nds_…`) open one stick's manifest, layout and report; creator keys (`ndc_…`) open every stick's. Pairing hands out the creator key once, to the poll token's holder, after an admin approved the code. `/api/usb/app/` is an exempt prefix in `auth.py`.
+- **USB Creator owns the stick layout.** It partitions with the Storage cmdlets (`Clear-Disk`, `Initialize-Disk -PartitionStyle MBR`, `New-Partition -MbrType IFS` for NDDATA, `-MbrType FAT32 -IsActive` for NDBOOT at the end), formats NDDATA exFAT, then writes the boot template's head raw to NDBOOT's volume (`FSCTL_LOCK_VOLUME` + `FSCTL_DISMOUNT_VOLUME` first) and `mbr.bin`'s 440 bytes to the disk. Volumes are opened by `\\?\Volume{GUID}\` path, so no drive letters are needed. `SyncEngine` then copies the files the way `make-stick.py` does: `.nd-<size>-<mtime>.part` with resume, size and mtime (±2 s, exFAT/FAT) checks, a layout without the changing images while they copy.
+- **PowerShell from USB Creator goes in as `-EncodedCommand`.** With `-Command -` PowerShell runs standard input line by line, so multi-line blocks never ran and the disk list came back empty. Only the exit code means failure: standard error also carries CLIXML progress records while the Storage module loads.
+- **USB Creator never lists the system or boot disk**, only `BusType` USB (and `File Backed Virtual` with the hidden `--allow-virtual-disks`, for VHDX tests on Windows: `New-VHD` + `Mount-VHD`, then `qemu-img convert -O raw` to boot it in QEMU).
 - **A stick's manifest never contains the SMB password**: offline Windows Setup reads its files from the stick. Its `cache_url` is the relay cache of the *caller's* subnet (`relay_for_client` on the request address) when that relay holds a current copy.
 
 **Relay cache**

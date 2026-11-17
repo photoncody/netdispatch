@@ -228,7 +228,12 @@
       <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
         <h3 class="font-semibold text-slate-100">USB Creator</h3>
         <p class="mt-1 text-sm text-slate-400">The Windows app that writes USB sticks. It shows a pairing code when it first connects to this hub: approve it here.</p>
-        <p class="mt-1 text-xs text-slate-500">USB Creator ships in a later release. Until then, <span class="font-mono">tests/e2e/make-stick.py</span> pairs the same way and writes a stick from Linux.</p>
+        <div class="mt-3 flex items-center gap-2">
+          <a href="/api/usb/creator" download
+             class="inline-block rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+             :class="mediaInfo && !mediaInfo.creator ? 'pointer-events-none opacity-40' : ''">Download USB Creator</a>
+          <span class="text-xs text-slate-500">Windows 10/11 x64 · about 50 MB · runs as administrator</span>
+        </div>
         <form class="mt-4 flex flex-wrap items-end gap-2" @submit.prevent="approvePairing(pairForm.code, pairForm.name)">
           <label class="text-xs uppercase tracking-wider text-slate-400">Code
             <input x-model="pairForm.code" placeholder="ABCD-EFGH" maxlength="9" required
