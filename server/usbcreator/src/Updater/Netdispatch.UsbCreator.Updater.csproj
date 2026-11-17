@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The stick's in-boot updater: runs in the hub's small Linux image (usb/updater) and
+       brings the stick up to date with the same sync engine as USB Creator. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Netdispatch.UsbCreator.Updater</RootNamespace>
+    <AssemblyName>netdispatch-stick-update</AssemblyName>
+    <RuntimeIdentifiers>linux-musl-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Netdispatch.UsbCreator.Core.csproj" />
+  </ItemGroup>
+</Project>

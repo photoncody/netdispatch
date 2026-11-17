@@ -13,9 +13,17 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models import ISO_READY, IsoImage, UsbPairing, utcnow
+from app.models import ISO_READY, STATE_BOOTING, STATE_WAITING, Device, IsoImage, UsbPairing, utcnow
 from app.unattend import render
-from app.usb_scripts import StickEntry, StickRef, render_media_script, render_stick_parent
+from app.usb_scripts import (
+    StickEntry,
+    StickRef,
+    StickUpdate,
+    parse_have_ref,
+    render_media_handoff,
+    render_media_script,
+    render_stick_parent,
+)
 from app.usb_sticks import HOSTNAME_MARKER, fat_used_bytes, offline_unattend_parts, template_missing
 from app.winpe import render_stick_cmd
 
@@ -454,3 +462,112 @@ def test_usb_creator_download(client, admin, settings):
         assert r.status_code == 404
     anon = TestClient(client.app, base_url="https://testserver")
     assert anon.get("/api/usb/creator").status_code == 401
+
+
+# ---------------------------------------------------------------- update prompt
+
+
+@pytest.fixture
+def updater(settings):
+    settings.usb_assets_dir.mkdir(parents=True, exist_ok=True)
+    made = []
+    for name in ("ndusb-vmlinuz", "ndusb-initramfs"):
+        path = settings.usb_assets_dir / name
+        if not path.exists():
+            path.write_bytes(b"updater " + name.encode())
+            made.append(path)
+    yield
+    for path in made:
+        path.unlink()
+
+
+def _etag(client, setup) -> str:
+    m = client.get(f"{APP}/sticks/{setup['sid']}/manifest", headers={"X-Stick-Key": setup["skey"]}).json()
+    return m["images"][0]["etag"]
+
+
+def test_parse_have_ref():
+    assert parse_have_ref("3:abcdef12,10:0123abcd") == {3: "abcdef12", 10: "0123abcd"}
+    assert parse_have_ref("-") == {} and parse_have_ref("") == {}
+    assert parse_have_ref("3:abc,x:abcdef12,4:ABCDEF12,5:abcdef12") == {5: "abcdef12"}
+
+
+def test_outdated_stick_is_offered_an_update(client, setup, updater):
+    sid, iso_id = setup["sid"], setup["iso"]
+    etag = _etag(client, setup)
+    mac = "52-54-00-aa-00-21"
+    base = f"/usb/boot?mac={mac}&ip=10.9.9.9&stick={sid}&platform=efi"
+    # Current: no prompt.
+    assert "press Y" not in client.get(f"{base}&have={iso_id}:{etag[:8]}").text
+    # Outdated copy.
+    r = client.get(f"{base}&have={iso_id}:00000000").text
+    assert "this USB stick is out of date: Windows 11 24H2 (newer on the hub)" in r
+    assert "prompt --key y --timeout 10000" in r
+    assert (
+        f"kernel -n nd-update http://10.0.0.5:8000/files/boot/ndusb-vmlinuz quiet loglevel=3"
+        f" nd.hub=http://10.0.0.5:8000 nd.stick={sid} || goto nd_update_failed"
+    ) in r
+    assert "initrd -n nd-update-initrd http://10.0.0.5:8000/files/boot/ndusb-initramfs" in r
+    assert r.index(":nd_boot") < r.index("chain --replace --autofree http://10.0.0.5:8000/boot?")
+    # Online-only sticks, unknown sticks and junk get no prompt.
+    for q in (f"stick={sid}&have=-", f"stick={sid}&have=", "stick=ffffffffffff&have=1:00000000", f"stick={sid}&have=zz"):
+        assert "press Y" not in client.get(f"/usb/boot?mac={mac}&{q}&platform=efi").text
+
+
+def test_update_prompt_skips_deployments_and_reported_failures(client, admin, app, setup, updater):
+    sid, iso_id = setup["sid"], setup["iso"]
+    pe = winpe_iso(app, app.state.settings)
+    r = admin.put(
+        f"/api/usb/profiles/{setup['profile']['id']}",
+        json={"name": "Lab", "entries": [
+            {"iso_id": iso_id, "unattend_id": setup["ua"], "label": "Windows 11"},
+            {"iso_id": pe, "label": "Rescue"},
+        ]},
+    )
+    assert r.status_code == 200, r.text
+    etag = _etag(client, setup)
+    mac = "52:54:00:aa:00:22"
+    url = f"/usb/boot?mac={mac}&stick={sid}&have={iso_id}:{etag[:8]}&platform=pcbios"
+    assert "Rescue PE (new)" in client.get(url).text
+    # The stick reported the new image as failed: not offered on every boot.
+    item = {"iso_id": pe, "etag": None, "status": "error", "bytes_done": 0, "bytes_total": 1, "message": "too big"}
+    h = {"X-Stick-Key": setup["skey"]}
+    assert client.post(f"{APP}/sticks/{sid}/report", json={"items": [item]}, headers=h).status_code == 200
+    assert "press Y" not in client.get(url).text
+    # A device being deployed is not held up by the prompt.
+    with app.state.sessionmaker() as db:
+        db.add(Device(mac=mac, state=STATE_BOOTING))
+        db.commit()
+    url = f"/usb/boot?mac={mac}&stick={sid}&have={iso_id}:00000000&platform=efi"
+    assert "press Y" not in client.get(url).text
+    with app.state.sessionmaker() as db:
+        db.query(Device).filter(Device.mac == mac).one().state = STATE_WAITING
+        db.commit()
+    assert "press Y" in client.get(url).text
+    # Revoked sticks are never offered one.
+    assert admin.delete(f"/api/usb/sticks/{sid}").status_code == 204
+    assert "press Y" not in client.get(url).text
+
+
+def test_update_prompt_needs_the_updater(client, setup, settings):
+    if not (settings.usb_assets_dir / "ndusb-vmlinuz").exists():
+        url = f"/usb/boot?mac=52-54-00-aa-00-23&stick={setup['sid']}&have={setup['iso']}:00000000"
+        assert "press Y" not in client.get(url).text
+
+
+def test_update_prompt_sanitises_names():
+    s = render_media_handoff(
+        "http://hub.test:8000", None, None,
+        update=StickUpdate("a1b2c3d4e5f6", ["Win ${evil} && reboot", "b", "c", "d", "e"]),
+    )
+    assert "${evil}" not in s and "&& reboot" not in s and "and 2 more" in s
+    with pytest.raises(ValueError):
+        render_media_handoff("http://hub.test:8000", None, None, update=StickUpdate("BAD$", ["x"]))
+
+
+def test_updater_files_are_served(client, settings, updater):
+    anon = TestClient(client.app, base_url="https://testserver")
+    for name in ("ndusb-vmlinuz", "ndusb-initramfs"):
+        r = anon.get(f"/files/boot/{name}")
+        assert r.status_code == 200 and r.content == (settings.usb_assets_dir / name).read_bytes()
+    assert anon.get("/files/boot/ndusb-other").status_code == 404

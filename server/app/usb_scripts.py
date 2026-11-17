@@ -70,6 +70,11 @@ _URL = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~\-/]*)?$")
 _STICK_ID = re.compile(r"^[a-z0-9]{6,32}$")
 # "<iso id>:<8 hex>," per image; a profile holds at most 50 (schemas.UsbProfileIn).
 _HAVE = re.compile(r"^[0-9a-f:,]{0,2048}$")
+_HAVE_ITEM = re.compile(r"^([0-9]{1,9}):([0-9a-f]{8})$")
+# The stick updater's Linux image, served from /files/boot/ (server/usbupdater).
+UPDATER_KERNEL = "ndusb-vmlinuz"
+UPDATER_INITRD = "ndusb-initramfs"
+UPDATE_PROMPT_MS = 10000
 
 
 def check_hub_url(url: str) -> str:
@@ -94,6 +99,17 @@ class StickRef:
             raise ValueError(f"bad stick id {self.id!r}")
         if not _HAVE.match(self.have):
             raise ValueError(f"bad image list {self.have!r}")
+
+
+def parse_have_ref(have: str) -> dict[int, str]:
+    """``nd-have`` as a stick's network script sends it (``StickRef.have``): iso id ->
+    the first 8 hex digits of the etag of its copy. ``-`` and junk give nothing."""
+    out: dict[int, str] = {}
+    for part in (have or "")[:2048].split(","):
+        m = _HAVE_ITEM.match(part)
+        if m:
+            out[int(m.group(1))] = m.group(2)
+    return out
 
 
 def render_media_script(
@@ -261,25 +277,72 @@ def render_media_script(
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class StickUpdate:
+    """Offer to update a stick before going on to ``/boot``."""
+
+    stick_id: str
+    images: list[str]  # what changed, for the prompt
+
+
 def render_media_handoff(
-    boot_url: str, relay_id: str | None, relay_name: str | None, *, usb_menu: bool = False
+    boot_url: str,
+    relay_id: str | None,
+    relay_name: str | None,
+    *,
+    usb_menu: bool = False,
+    update: StickUpdate | None = None,
 ) -> str:
     """``/usb/boot``'s answer: chain the normal ``/boot`` with the relay the hub
     picked for the client's subnet, or ``-`` (no relay: everything from the hub).
     ``usb_menu``: the client is a stick with images of its own, so the hold
-    loop offers L to go back to them."""
+    loop offers L to go back to them.
+
+    ``update``: the stick's images are behind the hub's. Y within 10 seconds
+    boots the stick updater (server/usbupdater) instead; any other key, or
+    none, goes on to ``/boot``. The updater is an unsigned Linux kernel, so
+    with Secure Boot on the firmware refuses it and the script says so."""
     relay = relay_id or "-"
     label = f"{ipxe_text(relay_name, 40)} ({ipxe_text(relay_id, 40)})" if relay_id else "none (direct to the hub)"
-    return "\n".join(
-        [
-            "#!ipxe",
-            f"# netdispatch {__version__} :: boot media hand-off",
-            f"echo netdispatch :: relay for this subnet: {label}",
-            f"chain --replace --autofree {boot_url}/boot?mac=${{netX/mac:hexhyp}}&ip=${{netX/ip}}"
-            f"&relay={relay}&arch=${{buildarch}}&platform=${{platform}}" + ("&usbmenu=1" if usb_menu else ""),
-            "",
+    lines = [
+        "#!ipxe",
+        f"# netdispatch {__version__} :: boot media hand-off",
+        f"echo netdispatch :: relay for this subnet: {label}",
+    ]
+    if update is not None:
+        if not _STICK_ID.match(update.stick_id):
+            raise ValueError(f"bad stick id {update.stick_id!r}")
+        shown = [ipxe_text(name, 60) for name in update.images[:3]]
+        if len(update.images) > 3:
+            shown.append(f"and {len(update.images) - 3} more")
+        hub = check_hub_url(boot_url)
+        files = f"{hub}/files/boot"
+        lines += [
+            "echo netdispatch :: this USB stick is out of date: " + ", ".join(shown),
+            f"prompt --key y --timeout {UPDATE_PROMPT_MS} netdispatch :: press Y to update the stick now,"
+            " or wait to boot as usual && goto nd_update || goto nd_boot",
+            ":nd_update",
+            f"kernel -n nd-update {files}/{UPDATER_KERNEL} quiet loglevel=3 nd.hub={hub} nd.stick={update.stick_id}"
+            " || goto nd_update_failed",
+            f"initrd -n nd-update-initrd {files}/{UPDATER_INITRD} || goto nd_update_failed",
+            "boot || goto nd_update_failed",
+            ":nd_update_failed",
+            "imgfree nd-update || goto nd_update_freed",
+            ":nd_update_freed",
+            "imgfree nd-update-initrd || goto nd_update_msg",
+            ":nd_update_msg",
+            "echo netdispatch :: the stick updater did not start. With Secure Boot on, the firmware",
+            "echo netdispatch :: refuses it: turn Secure Boot off for the update, or update the stick",
+            "echo netdispatch :: with USB Creator. Booting as usual in 10 seconds.",
+            "sleep 10 || goto nd_boot",
+            ":nd_boot",
         ]
-    )
+    lines += [
+        f"chain --replace --autofree {boot_url}/boot?mac=${{netX/mac:hexhyp}}&ip=${{netX/ip}}"
+        f"&relay={relay}&arch=${{buildarch}}&platform=${{platform}}" + ("&usbmenu=1" if usb_menu else ""),
+        "",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- USB sticks

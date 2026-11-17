@@ -50,6 +50,7 @@ from .models import (
     BOOT_WINDOWS_SETUP,
     BOOT_WINPE,
     ISO_READY,
+    STICK_ITEM_ERROR,
     IsoImage,
     UnattendConfig,
     UsbCreator,
@@ -65,6 +66,9 @@ from .relay_cache import _walk_tree, ascii_lower
 from .unattend import read_template, render
 from .usb_media import MediaError, _run
 from .usb_scripts import (
+    UPDATER_INITRD,
+    UPDATER_KERNEL,
+    parse_have_ref,
     EFI_DIR,
     EFI_NATIVE_DIR,
     STICK_DIR,
@@ -348,6 +352,46 @@ def parse_have(have: dict) -> dict[int, str]:
         if isinstance(v, str) and len(v) == 64 and all(c in "0123456789abcdef" for c in v):
             out[iso_id] = v
     return out
+
+
+def stick_updates(db: Session, settings: Settings, images: StickManifests, stick_id: str, have: str) -> list[str]:
+    """What a booting stick is behind on, for ``/usb/boot``'s update prompt:
+    images whose copy (``have``, as the stick's network script sends it)
+    differs from the hub's, and profile images the stick doesn't hold yet.
+
+    Nothing for an online-only stick (it holds no images, and the updater
+    only adds them where a writer chose to), a revoked or unknown stick, or
+    images the hub is still preparing. An image the stick last reported as
+    failed (too big, a broken file) isn't offered again on every boot."""
+    held = parse_have_ref(have)
+    if not held:
+        return []
+    stick = db.get(UsbStick, stick_id)
+    if stick is None or stick.revoked:
+        return []
+    failed = {
+        i.iso_id
+        for i in db.query(UsbStickItem).filter(UsbStickItem.stick_id == stick.id, UsbStickItem.status == STICK_ITEM_ERROR)
+    }
+    out: list[str] = []
+    seen: set[int] = set()
+    for _entry, iso in profile_entries(db, stick.profile_id):
+        if iso.id in seen:
+            continue
+        seen.add(iso.id)
+        image = images.get(settings, iso)
+        if image is None or image.error:
+            continue
+        if iso.id in held:
+            if held[iso.id] != image.etag[:8]:
+                out.append(f"{iso.name} (newer on the hub)")
+        elif iso.id not in failed:
+            out.append(f"{iso.name} (new)")
+    return out
+
+
+def updater_missing(settings: Settings) -> bool:
+    return not all((settings.usb_assets_dir / n).is_file() for n in (UPDATER_KERNEL, UPDATER_INITRD))
 
 
 def render_layout(db: Session, settings: Settings, stick: UsbStick, have: dict[int, str]) -> dict:

@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using Netdispatch.UsbCreator.Core;
 
 namespace Netdispatch.UsbCreator.Windows;
@@ -56,13 +55,6 @@ public sealed class StickWriter(HubClient hub, string creatorKey, IProgress<stri
         {
             log?.Report("Note: this hub makes UEFI-only sticks (no SYSLINUX on its CPU architecture)");
         }
-        using var gz = new GZipStream(new MemoryStream(t.Gzipped), CompressionMode.Decompress);
-        using var head = new MemoryStream();
-        await gz.CopyToAsync(head).ConfigureAwait(false);
-        if (head.Length != t.HeadBytes)
-        {
-            throw new HubException($"boot template: got {head.Length} bytes, expected {t.HeadBytes}");
-        }
-        return head.ToArray();
+        return BootTemplates.Unpack(t);
     }
 }

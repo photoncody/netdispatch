@@ -1,0 +1,108 @@
+#!/bin/sh
+# netdispatch USB stick updater: PID 1 of the small Linux image that /usb/boot starts when
+# someone answers Y to "update this stick?". It finds the stick (NDDATA + NDBOOT), gets
+# an address by DHCP and runs netdispatch-stick-update, the same sync engine as USB Creator.
+# Kernel parameters: nd.hub=<hub URL> nd.stick=<stick id>.
+/bin/busybox --install -s
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root TERM=linux TMPDIR=/tmp
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t tmpfs tmpfs /tmp
+dmesg -n 1
+
+HUB=
+STICK=
+# shellcheck disable=SC2013 # the kernel command line is split into words on purpose
+for arg in $(cat /proc/cmdline); do
+  case "$arg" in
+    nd.hub=*) HUB=${arg#nd.hub=} ;;
+    nd.stick=*) STICK=${arg#nd.stick=} ;;
+  esac
+done
+
+say() { echo "netdispatch :: $*"; }
+
+finish() {
+  umount /mnt/boot 2>/dev/null
+  umount /mnt/data 2>/dev/null
+  sync
+  echo
+  say "$1"
+  say "press Enter to restart (or type s and Enter for a shell); restarting in 60 seconds"
+  # shellcheck disable=SC3045 # busybox sh has read -t
+  if read -r -t 60 answer && [ "$answer" = s ]; then
+    sh
+  fi
+  sync
+  reboot -f
+}
+
+clear
+say "USB stick updater"
+[ -n "$HUB" ] || finish "no hub given (nd.hub=)"
+
+say "loading drivers"
+grep -v -e '^#' -e '^$' /etc/netdispatch-modules 2>/dev/null | while read -r mod; do
+  modprobe "$mod" 2>/dev/null
+done
+
+# The parent disk of a partition: sdb1 -> sdb, nvme0n1p2 -> nvme0n1.
+disk_of() { basename "$(dirname "$(readlink -f "/sys/class/block/${1#/dev/}")")"; }
+
+labelled() { blkid | sed -n "s/^\([^:]*\):.* LABEL=\"$1\".*/\1/p"; }
+
+find_stick() {
+  for dev in $(labelled NDDATA); do
+    mount -t exfat -o ro "$dev" /mnt/data 2>/dev/null || continue
+    if [ -z "$STICK" ] || grep -q "\"id\": \"$STICK\"" /mnt/data/netdispatch/stick.json 2>/dev/null; then
+      umount /mnt/data
+      for boot in $(labelled NDBOOT); do
+        if [ "$(disk_of "$boot")" = "$(disk_of "$dev")" ]; then
+          DATA=$dev
+          BOOT=$boot
+          return 0
+        fi
+      done
+    else
+      umount /mnt/data
+    fi
+  done
+  return 1
+}
+
+say "looking for the stick${STICK:+ $STICK}"
+tries=0
+until find_stick; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 30 ] || finish "the stick was not found: no NDDATA and NDBOOT partitions${STICK:+ of stick $STICK}"
+  sleep 1
+done
+say "stick: $DATA (NDDATA), $BOOT (NDBOOT)"
+
+say "starting the network"
+for n in /sys/class/net/*; do
+  [ "${n##*/}" = lo ] || ip link set "${n##*/}" up 2>/dev/null
+done
+sleep 3
+NET=
+for n in /sys/class/net/*; do
+  i=${n##*/}
+  [ "$i" = lo ] && continue
+  if udhcpc -i "$i" -n -q -t 5 -T 2 -s /usr/share/udhcpc/default.script >/dev/null 2>&1; then
+    NET=$i
+    break
+  fi
+done
+[ -n "$NET" ] || finish "no network: no adapter got an address by DHCP"
+say "network: $NET $(ip -4 -o addr show dev "$NET" | awk '{print $4}')"
+
+mount -t exfat -o rw,iocharset=utf8 "$DATA" /mnt/data || finish "could not mount $DATA"
+mount -t vfat -o rw,shortname=mixed,utf8 "$BOOT" /mnt/boot || finish "could not mount $BOOT"
+
+/opt/netdispatch/netdispatch-stick-update --hub "$HUB" --data /mnt/data --boot /mnt/boot --boot-device "$BOOT"
+case $? in
+  0) finish "the stick is up to date" ;;
+  3) finish "the stick is up to date except for the images above" ;;
+  *) finish "the update did not finish: the stick keeps the images that were complete. Try again, or use USB Creator" ;;
+esac

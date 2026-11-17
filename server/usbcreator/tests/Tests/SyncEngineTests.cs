@@ -215,6 +215,24 @@ public class SyncEngineTests
         Assert.Throws<HubException>(() => roots.Resolve("data", path));
     }
 
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(2, true)]
+    [InlineData(-2, true)]
+    [InlineData(3, false)]
+    [InlineData(60, false)]
+    [InlineData(3600, true)]      // Windows in UTC+1, read as UTC
+    [InlineData(-18000, true)]    // UTC-5
+    [InlineData(19800 + 1, true)] // UTC+5:30, and FAT's 2-second steps
+    [InlineData(20700, true)]     // UTC+5:45
+    [InlineData(3600 + 30, false)]
+    [InlineData(15 * 3600, false)]
+    public void MtimesMatchAcrossTimeZones(long shift, bool same)
+    {
+        const long t = 1_763_000_000;
+        Assert.Equal(same, SyncEngine.SameMtime(t + shift, t));
+    }
+
     [Fact]
     public void BootPartitionHoldsTwoCopies()
     {

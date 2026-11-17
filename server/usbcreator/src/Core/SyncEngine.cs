@@ -160,7 +160,21 @@ public sealed class SyncEngine
             return false;
         }
         var mtime = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeSeconds();
-        return Math.Abs(mtime - file.Mtime) <= MtimeSlackSeconds;
+        return SameMtime(mtime, file.Mtime);
+    }
+
+    /// <summary>FAT keeps local time without a zone, so a stick written on Windows in one
+    /// time zone and read by the Linux updater (UTC) shows every time shifted by the zone's
+    /// offset. A shift by whole quarter hours, up to 14 hours, therefore still matches.</summary>
+    internal static bool SameMtime(long actual, long expected)
+    {
+        var diff = Math.Abs(actual - expected);
+        if (diff > 14 * 3600 + MtimeSlackSeconds)
+        {
+            return false;
+        }
+        var off = diff % 900;
+        return off <= MtimeSlackSeconds || off >= 900 - MtimeSlackSeconds;
     }
 
     private async Task<long> DownloadAsync(ManifestImage image, ManifestFile file, string dest, Action<long> progress, CancellationToken ct)
